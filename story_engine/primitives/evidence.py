@@ -17,8 +17,8 @@ class EvidenceSpan(BaseModel):
     """回指 ScriptStore 位置。chapter 必填；scene 省略=整章；beats 省略=整场。"""
 
     chapter: int = Field(..., ge=0)
-    scene: int | None = Field(default=None, ge=0)
-    beats: tuple[int, int] | None = None  # [from, to]，闭区间
+    scene: int | None = Field(default=None, ge=1)  # 场号 1-indexed
+    beats: tuple[int, int] | None = None  # [from, to]，闭区间，1-indexed
 
     @model_validator(mode="after")
     def _check(self) -> "EvidenceSpan":
@@ -26,6 +26,8 @@ class EvidenceSpan(BaseModel):
             if self.scene is None:
                 raise ValueError("beats 存在时 scene 必填")
             lo, hi = self.beats
+            if lo < 1:
+                raise ValueError(f"beat 序号 1-indexed，lo 须 ≥1: {self.beats}")
             if lo > hi:
                 raise ValueError(f"beats 区间非法: {self.beats}")
         return self

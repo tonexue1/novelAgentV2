@@ -24,10 +24,10 @@ def test_genesis_reaches_s0():
     assert result.l1.threads and result.l1.threads[0].tier == "main"
     assert result.world and all(w.definition for w in result.world)
     assert result.arcs  # ArcStore 台账已建
-    # 台账含 thread(OPEN) + foreshadow(PLANNED)
-    kinds = {a.kind: a.status for a in result.arcs}
-    assert kinds.get("thread") == "OPEN"
-    assert kinds.get("foreshadow") == "PLANNED"
+    # 台账含 thread(thread_state=OPEN) + foreshadow(state=PLANNED)
+    by_kind = {a.kind: a for a in result.arcs}
+    assert by_kind["thread"].thread_state == "OPEN"
+    assert by_kind["foreshadow"].state == "PLANNED"
 
 
 def test_genesis_trace_has_stages():

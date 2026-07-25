@@ -29,8 +29,8 @@ def resolve_span(span: EvidenceSpan, script_store) -> bool:
         return False
     if span.beats is None:
         return True  # 整场
-    _, hi = span.beats
-    return hi <= len(scene.beats)  # beat 1-indexed
+    lo, hi = span.beats
+    return 1 <= lo <= hi <= len(scene.beats)  # beat 1-indexed，含下界
 
 
 # ── 规则 ────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ def check_evidence_resolvable(items, script_store, *, chapter: int) -> list[Viol
                         severity=Severity.BLOCK,
                         detail=f"evidence {span.to_str()} 无法解析到已提交 ScriptStore 位置",
                         chapter=chapter,
-                        subject=getattr(it, "mem_id", None) or getattr(it, "arc_id", None),
+                        subject=getattr(it, "id", None),
                         evidence=[span],
                     )
                 )
@@ -55,10 +55,10 @@ def check_evidence_resolvable(items, script_store, *, chapter: int) -> list[Viol
 
 
 def check_ability_monotonic(mem_store, scope: str, *, chapter: int) -> list[Violation]:
-    """角色 ability 台阶随时间非降。检测后出现的 rank 低于此前有效 rank。"""
+    """角色 ability 台阶随时间非降（as-of chapter，排除未来台阶与软失效条目）。"""
     abilities = [
         m
-        for m in mem_store.query(scope=scope, type="ability")
+        for m in mem_store.as_of(chapter, scope=scope, type="ability")
         if m.ability_rank is not None
     ]
     abilities.sort(key=lambda m: m.t_valid)
@@ -83,26 +83,29 @@ def check_ability_monotonic(mem_store, scope: str, *, chapter: int) -> list[Viol
             )
         else:
             peak = m.ability_rank
-            peak_ref = m.mem_id
+            peak_ref = m.id
     return out
 
 
 def check_secret_boundary(
     char_id: str, referenced_arc_ids: list[str], arc_store, *, chapter: int
 ) -> list[Violation]:
-    """角色引用/说出了自己被 hidden_from 的 secret。"""
+    """角色引用/说出了 as-of 本章自己尚不知情的 secret（认知边界穿帮）。
+
+    知情 = knowledge[] 中 char since_ch ≤ chapter；否则视为 hidden（隐式补集）。
+    """
     out: list[Violation] = []
     for aid in referenced_arc_ids:
         arc = arc_store.get(aid)
         if arc is None or arc.kind != "secret":
             continue
-        if char_id in arc.hidden_from:
+        if not arc.knows_as_of(char_id, chapter):
             out.append(
                 Violation(
                     vio_id=mint_violation_id(),
                     rule="secret_boundary",
                     severity=Severity.CORRECT,
-                    detail=f"{char_id} 触及被隐藏的 secret {aid}（认知边界穿帮）",
+                    detail=f"{char_id} 触及第 {chapter} 章尚未知情的 secret {aid}（认知边界穿帮）",
                     chapter=chapter,
                     subject=aid,
                 )

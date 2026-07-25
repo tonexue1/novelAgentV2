@@ -62,7 +62,12 @@ class LLMClient:
         chapter: int | None = None,
         **cfg: object,
     ) -> T:
-        """调 provider，把返回文本按 response_model 校验成 pydantic 实例。"""
+        """调 provider，把返回文本按 response_model 校验成 pydantic 实例。
+
+        TODO(接真 LLM 前, review §3.1): 现手搓 model_validate_json + 循环重试很脆——
+          无 ```json 围栏剥离、无 schema 注入 prompt、无「带报错让模型自修复」。
+          接真 provider 时换 instructor / provider 原生 structured output，重试用 tenacity。
+        """
         last_err: Exception | None = None
         for attempt in range(self._max_retries + 1):
             t0 = time.perf_counter()

@@ -55,7 +55,7 @@ def _tokenize(text: str) -> list[str]:
 @dataclass
 class Query:
     as_of_chapter: int
-    char_id: str | None = None       # character 节点：限 scope + 认知边界
+    char: str | None = None          # character 节点：全称 char.{slug}，限 scope + 认知边界
     focus: str = ""                  # 场景目标 / 关键词，供词法相关
     budget_tokens: int = 2000
     bucket_weights: dict[str, float] | None = None   # None=默认权重
@@ -93,6 +93,9 @@ class RetrievalResult:
         return out
 
 
+# TODO(M4, review §2.4): 分桶语义待与 §8.2 重对齐——
+#   fact 应归 character 桶（经历子桶），streaming 桶应是「过去章」script 而非本章。
+#   现状 M1 无 embedding，桶标签暂不影响结果，接真检索/子预算前修。
 _BUCKET_BY_MEMTYPE = {
     "fact": "trajectory",
     "belief": "character",
@@ -105,7 +108,7 @@ _BUCKET_BY_MEMTYPE = {
 
 def _mem_to_item(m, as_of_chapter: int) -> RetrievableItem:
     return RetrievableItem(
-        item_id=m.mem_id,
+        item_id=m.id,
         text=m.text,
         kind=f"memory:{m.type}",
         scope=m.scope,
@@ -121,21 +124,22 @@ def retrieve(query: Query, mem_store, arc_store=None) -> RetrievalResult:
     # ── ① 过滤 ────────────────────────────────────────────
     candidates: list[RetrievableItem] = []
     for m in mem_store.as_of(query.as_of_chapter):
-        if query.char_id is not None:
-            if m.scope not in (f"char:{query.char_id}", "world"):
+        if query.char is not None:
+            if m.scope not in (query.char, "global"):
                 continue
         candidates.append(_mem_to_item(m, query.as_of_chapter))
 
     if arc_store is not None:
         for a in arc_store.all():
-            if a.since_ch > query.as_of_chapter:
+            if a.established_ch > query.as_of_chapter:
                 continue
-            if a.kind == "secret" and query.char_id and query.char_id in a.hidden_from:
-                continue  # 认知边界：不知道的 secret 不检回
+            # 认知边界：as-of 本章不知情的 secret 不检回（knowledge[] 隐式补集）
+            if a.kind == "secret" and query.char and not a.knows_as_of(query.char, query.as_of_chapter):
+                continue
             candidates.append(
                 RetrievableItem(
-                    item_id=a.arc_id, text=a.desc, kind=f"arc:{a.kind}",
-                    scope="arc", t_valid=a.since_ch, salience=0.6, tier=None,
+                    item_id=a.id, text=a.desc, kind=f"arc:{a.kind}",
+                    scope="arc", t_valid=a.established_ch, salience=0.6, tier=None,
                     bucket="trajectory",
                 )
             )

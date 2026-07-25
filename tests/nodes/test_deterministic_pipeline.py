@@ -18,8 +18,8 @@ def test_deterministic_half_composes(tmp_path):
     script_store: JsonStore[ChapterScript] = JsonStore(
         ChapterScript, tmp_path / "script.jsonl", key_field="chapter"
     )
-    mem: JsonStore[MemoryEntry] = JsonStore(MemoryEntry, tmp_path / "m.jsonl", key_field="mem_id")
-    arc: JsonStore[ArcRecord] = JsonStore(ArcRecord, tmp_path / "a.jsonl", key_field="arc_id")
+    mem: JsonStore[MemoryEntry] = JsonStore(MemoryEntry, tmp_path / "m.jsonl", key_field="id")
+    arc: JsonStore[ArcRecord] = JsonStore(ArcRecord, tmp_path / "a.jsonl", key_field="id")
     ap = Applier()
 
     # 1) beat 定序 + 提交 ScriptStore（主真相）
@@ -37,9 +37,9 @@ def test_deterministic_half_composes(tmp_path):
     ro = RecorderOutput(
         chapter=1,
         mem_ops=[
-            MemOp(op="ADD", scope="char:ye_fan", type="fact", text="拜入青云门",
+            MemOp(action="ADD", scope="char.ye_fan", type="fact", text="拜入青云门",
                   evidence=[EvidenceSpan.parse("c1.s1.b1")]),
-            MemOp(op="ADD", scope="char:ye_fan", type="goal", text="为父报仇",
+            MemOp(action="ADD", scope="char.ye_fan", type="goal", text="为父报仇",
                   evidence=[EvidenceSpan.parse("c1.s1.b2")]),
         ],
     )
@@ -51,5 +51,5 @@ def test_deterministic_half_composes(tmp_path):
     assert vios == []
 
     # 4) Retriever：as-of 第 3 章检回该角色记忆
-    res = retrieve(Query(as_of_chapter=3, char_id="ye_fan", focus="报仇", budget_tokens=4000), mem, arc)
+    res = retrieve(Query(as_of_chapter=3, char="char.ye_fan", focus="报仇", budget_tokens=4000), mem, arc)
     assert len(res.items) == 2
