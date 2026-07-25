@@ -13,6 +13,8 @@ from typing import Generic, TypeVar
 
 from pydantic import BaseModel
 
+from story_engine.schemas.base import Temporal
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -51,6 +53,24 @@ class JsonStore(Generic[T]):
         self._append_line(entry)
         return str(getattr(entry, self._key_field))
 
+    def update(self, key: str, **changes: object) -> T:
+        """就地更新（派生投影语义，如软失效）；重写文件保持持久化诚实。
+
+        ScriptStore 等只追加 store 按纪律不调用本方法。
+        """
+        item = self.get(key)
+        if item is None:
+            raise KeyError(f"未找到 key={key!r}")
+        for k, v in changes.items():
+            setattr(item, k, v)
+        self._rewrite()
+        return item
+
+    def _rewrite(self) -> None:
+        with self._path.open("w", encoding="utf-8") as f:
+            for it in self._items:
+                f.write(it.model_dump_json() + "\n")
+
     def get(self, key: str) -> T | None:
         for it in self._items:
             if str(getattr(it, self._key_field)) == key:
@@ -64,16 +84,13 @@ class JsonStore(Generic[T]):
         return [it for it in self._items if self._match(it, filters)]
 
     def as_of(self, chapter: int, **filters: object) -> list[T]:
+        """as-of 章过滤：Temporal 条目按 visible_as_of 判定；非 Temporal 始终可见。"""
         out: list[T] = []
         for it in self._items:
             if not self._match(it, filters):
                 continue
-            t_valid = getattr(it, "t_valid", None)
-            if t_valid is not None and t_valid > chapter:
-                continue  # 尚未生效（未来泄漏）
-            t_invalid = getattr(it, "t_invalid", None)
-            if t_invalid is not None and t_invalid <= chapter:
-                continue  # 已软失效
+            if isinstance(it, Temporal) and not it.visible_as_of(chapter):
+                continue
             out.append(it)
         return out
 

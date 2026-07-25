@@ -17,3 +17,21 @@ class SchemaModel(BaseModel):
         validate_assignment=True,
         frozen=False,
     )
+
+
+class Temporal:
+    """as-of 时间语义 mixin（显式化，替代 Store 里的鸭子类型探字段）。
+
+    带此 mixin 的条目须有 t_valid（生效章）与 t_invalid（软失效章，None=仍有效）。
+    Store.as_of 用 isinstance(item, Temporal) 判定，无此 mixin 者视为始终可见。
+    """
+
+    t_valid: int
+    t_invalid: int | None
+
+    def visible_as_of(self, chapter: int) -> bool:
+        if self.t_valid > chapter:
+            return False  # 尚未生效（未来泄漏）
+        if self.t_invalid is not None and self.t_invalid <= chapter:
+            return False  # 已软失效
+        return True

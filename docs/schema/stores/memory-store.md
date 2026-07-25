@@ -45,10 +45,11 @@ MemoryEntry:
   salience?   : float                                  # 显著度，抗 recency 淹没（fact 用）
   resolution? : achieved | abandoned | superseded      # 软失效原因（goal/伏笔用）
   # type 专属
-  goal_kind?  : long-drive | stage-goal                # goal
-  parent?     : m.{ulid}                               # goal 层级链
-  example?    : str                                    # voice 真实台词例句（few-shot 库）
-  tier?       : 0 | 1 | 2 | 3                          # 角色分层（画像完整度/检索降权）
+  goal_kind?    : long-drive | stage-goal              # goal
+  parent?       : m.{ulid}                             # goal 层级链
+  example?      : str                                  # voice 真实台词例句（few-shot 库）
+  tier?         : 0 | 1 | 2 | 3                        # 角色分层（画像完整度/检索降权）
+  ability_rank? : int                                  # ability 台阶序（越高越强）；修为单调硬检直接比较此值
 ```
 
 ### 画像 vs 经历（取法相反）
@@ -65,7 +66,7 @@ MemoryEntry:
 - **trait**：对立维度打分（慈悲↔狠戾=-0.8）+ 章节时间线。
 - **belief**：信念陈述 + 强度 + 证据 + 软失效。
 - **voice**：风格摘要 + 真实台词例句库（`example`，靠 few-shot 不靠形容词）。
-- **ability**：等级台阶 + 时间线（配 world-store 境界 canon + 单调硬检）。
+- **ability**：等级台阶 + 时间线（配 world-store 境界 canon + 单调硬检）。台阶用 `ability_rank`（整数序）承载，Hard-Check 按 as-of 比较其非降（越级战斗是软判，见 EVALUATION A3）。
 - **goal**：多尺度（long-drive / stage-goal；场景意图不持久走 scene-script）+ `parent` 层级链 + 生命周期（软失效 + resolution）。长期 drive 意图在 L1.character_arc，实际轨迹在此，相减=角色弧线漂移。
 - **fact**：发生过什么 + involves + salience；蒸馏版，evidence 指回原文（双分辨率）。
 

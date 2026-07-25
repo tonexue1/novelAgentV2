@@ -8,6 +8,8 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.2",
     "python-ulid>=2.0",
+    "tiktoken>=0.7",       # 精确 token 计数（Retriever 预算 / Chunker）
+    "rank-bm25>=0.2",      # 词法相关性打分（Retriever 规则版）
 ]
 
 [project.optional-dependencies]

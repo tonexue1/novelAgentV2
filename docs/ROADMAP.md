@@ -9,7 +9,7 @@
 | # | 里程碑 | 干什么 | 关键产出 | 风险 |
 |---|--------|--------|---------|------|
 | **M0 ✅** | 地基脚手架 | Python 包结构（primitives/schemas/stores/llm/nodes/orchestrator/telemetry）、原语代码化（id / EvidenceSpan / StoryTime / 枚举）、Store 抽象层（JSON + as-of）、LLM 客户端封装（结构化输出 + 重试 + 成本记账）、telemetry 留痕、Orchestrator 骨架 | 能跑空流程（27 UT 全绿） | 低 |
-| **M1** | 确定性内核（无 LLM） | Applier / Hard-Check / Retriever（规则版）/ Chunker + **Genesis Gate 闭包检查** + 一批确定性 UT | 第一批绿 UT | 低 |
+| **M1 ✅** | 确定性内核（无 LLM） | Applier（beat 定序 + 软失效 + arc 状态机）/ Hard-Check（evidence 可解析 / 修为单调 / secret 边界）/ Retriever（规则版 filter→rank→budget，BM25+tiktoken）/ Chunker + Temporal mixin + **Genesis Gate 闭包检查** + 确定性 UT 批 | 46 UT 全绿；检索质量+修为单调标杆落地 | 低 |
 | **M2** | 单章垂直切片 | 创世最小版（seed→L0/L1→Gate→S₀）→ Planner→Director→Character→Script→Writer→Extractor→Applier | **端到端出第 1 章** | 中 |
 | **M3** | 递推闭环 | 真检索（画像+预算）、Character 逐拍 dispatch（定锚不定序+handoff）、一致性闸全链（升级阶梯+重试）、Faithfulness Check | **连跑 N 章不崩** | 高 |
 | **M4** | 长程/规划 | Summarizer 多分辨率摘要、Embedder+向量库、Replanner 卷复盘+漂移度量、伏笔状态机全生命周期、re-tiering/晋升、rolling horizon | **跑到卷级/百章** | 最高 |

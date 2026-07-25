@@ -11,12 +11,12 @@ from pydantic import Field
 
 from story_engine.primitives.enums import CharTier
 from story_engine.primitives.evidence import EvidenceSpan
-from story_engine.schemas.base import SchemaModel
+from story_engine.schemas.base import SchemaModel, Temporal
 
 MemType = Literal["fact", "belief", "trait", "voice", "ability", "goal"]
 
 
-class MemoryEntry(SchemaModel):
+class MemoryEntry(SchemaModel, Temporal):
     mem_id: str                      # m.{ulid}
     scope: str                       # char:{slug} | world | ...
     type: MemType
@@ -28,3 +28,4 @@ class MemoryEntry(SchemaModel):
     origin: str = "extracted"        # extracted | seeded
     evidence: list[EvidenceSpan] = Field(default_factory=list)
     parent: str | None = None        # goal.parent 引用另一 mem_id
+    ability_rank: int | None = None  # type=ability 时的台阶序（修为单调硬检用）
