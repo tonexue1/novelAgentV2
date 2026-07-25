@@ -24,4 +24,14 @@
 
 ## 状态
 
-设计阶段。尚未开始实现。下一步见 `docs/ARCHITECTURE.md` 末尾"后续待办"。
+**M0 地基脚手架已落地**（见 [docs/ROADMAP.md](docs/ROADMAP.md)）：原语（id/EvidenceSpan/枚举）、schema 模型、JSON Store（含 as-of）、LLM 封装（结构化输出+成本记账）、telemetry 留痕、Genesis Gate 确定性检查、创世/单章 orchestrator 骨架，`pytest` 全绿。下一步：M1 确定性内核 → M2 单章垂直切片。
+
+## 开发
+
+```bash
+python -m uv venv           # 建虚拟环境
+python -m uv pip install pydantic pydantic-settings pytest
+python -m pytest            # 全绿
+```
+
+包结构与 `docs/` 一一对应：`primitives ↔ schema/primitives`、`schemas ↔ schema/stores+artifacts`、`nodes ↔ docs/nodes`。

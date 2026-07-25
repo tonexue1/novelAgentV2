@@ -47,6 +47,7 @@ L1  {version, created_at_ch, status}:   # 整份快照版本化；防漂移主�
   foreshadow_map[] : {fs_id: fs.{slug}, desc, plant_range,
                       payoff_deadline: {granularity: chapter|volume|saga, ref},   # 粗粒度可埋，Replanner 逐步收紧
                       importance: core|major|minor}
+  world_refs[]     : world_id[]        # L1 点名依赖的承重 canon（→ world-store）；创世 Gate 闭包检查的显式依据
   pacing_curve?    : ...
 
 L2  {vol_id, version}:                   # 每卷；滚动生成
@@ -66,6 +67,7 @@ L2  {vol_id, version}:                   # 每卷；滚动生成
 - `foreshadow_map.payoff_deadline` 支持**粗粒度**：core 超长伏笔埋时可只标 `saga` 级，Replanner 逐步收紧成 `volume`→`chapter`。临期判定用粒度下界。
 - **滚动地平线（1000+ 章命门）**：只冻 L0（终点）+ L1 篇级骨架 + core 伏笔；近段 `detail_level=detailed`，远段 `sketch`（一句 gist）。意图固定、细节 JIT，漂移闭环保证朝 L0 收敛。
 - **决定**：① L0 纯立意无 id、id 一律 L1 铸；② L2.chapter_beats 用 `planned_seq` 占位、不绑 `c{n}`；③ L1 整份快照版本化。
+- **`world_refs` 显式化**：L1 对承重 canon 的引用**显式列成 id 数组**，不靠从文本字段里抽。理由：创世 Genesis Gate 的「引用闭包 / 无悬挂」是**确定性硬检**（见 ARCHITECTURE §2.6 与 EVALUATION §2.3 创世 UT），需要一份精确、可枚举的引用清单；散在文本里则退化成模糊抽取。Architect 出 L1 骨架时同步填 `world_refs`（点名它需要 Worldbuilder 补哪些 canon）。
 
 ## 配套（不在 PlanStore，登记于此）
 
