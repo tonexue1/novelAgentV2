@@ -93,9 +93,10 @@ class RetrievalResult:
         return out
 
 
-# TODO(M4, review §2.4): 分桶语义待与 §8.2 重对齐——
+# TODO(M4, review ARCHITECTURE §8 / §8.2): 分桶语义待重对齐——
 #   fact 应归 character 桶（经历子桶），streaming 桶应是「过去章」script 而非本章。
 #   现状 M1 无 embedding，桶标签暂不影响结果，接真检索/子预算前修。
+#   （旧注曾写 §2.4，ARCHITECTURE 无此节，已更正。）
 _BUCKET_BY_MEMTYPE = {
     "fact": "trajectory",
     "belief": "character",

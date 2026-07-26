@@ -163,9 +163,10 @@ L2 (每卷, 版本化):
   vol_id, version, goal,
   thread_targets[]     : {thread_id, target_milestone}
   foreshadow_due[]     : {fs_id, action: plant|fulfill}
+  volume_spine         : {shared_pressure, inciting, midpoint, climax}
+  chapter_beats[]      : 事件链 {event, inherits[], leaves_open[], touches_spine, pov_focus?}
   character_targets[]  : {char_id, target_state}
-  chapter_beats[]      : 粗, 每章一句
-  entries[], exits[], climax_position
+  entries[], exits[]
 
 L3 = ChapterPlan (见第 6 节) + derived_from: {l2_vol_id, l1_thread_ids[]}  ← 可追溯
 ```
@@ -703,4 +704,4 @@ D 把它挡在 U 步。两者合起来才夹住递推的两项。
 - [x] **创世 flow / 冷启动 S₀** —— 见第 2.6 节（S₀ 产物清单、G0~G5 阶段、Genesis Gate 收敛判据、意图驱动 canon、人工关卡）。
 - [ ] **world entity minor→晋升的触发信号**（与角色 re-tiering 对称）：复现次数 / 跨场景使用 / salience 累积超阈值 → Recorder 提名。当前 §11.4 只说"需要才晋升"，未定判据（皆字秘式"临时起意→用大半本书"的捕捉靠它）。
 - [ ] 定 Python 模块划分（stores / nodes / orchestrator / renderers）。
-- [ ] 选型：向量库、embedding 模型、LLM provider、（未来）VLM。
+- [x] **LLM provider（M2）**：DeepSeek `deepseek-v4-pro`，OpenAI 兼容端点 + instructor 结构化输出；配置走 `STORY_*` env（见 README / `.env.example`）。向量库 / embedding /（未来）VLM 仍待选型。

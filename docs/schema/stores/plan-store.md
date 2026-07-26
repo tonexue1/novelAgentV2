@@ -50,15 +50,22 @@ L1  {version, created_at_ch, status}:   # 整份快照版本化；防漂移主�
   world_refs[]     : world_id[]        # L1 点名依赖的承重 canon（→ world-store）；创世 Gate 闭包检查的显式依据
   pacing_curve?    : ...
 
-L2  {vol_id, version}:                   # 每卷；滚动生成
+L2  {vol_id, version}:                   # 每卷；滚动生成（先脊骨，后事件链）
   goal
   thread_targets[]    : {thread_id, target_milestone}
   foreshadow_due[]    : {fs_id, action: plant|fulfill}       # → 派生 due list 喂 Planner
-  character_targets[] : {char_id, target_state}
-  chapter_beats[]     : {planned_seq: int, gist: str}         # 粗，每章一句；不绑 c{n}
+  volume_spine        : {shared_pressure, inciting, midpoint, climax}
+  chapter_beats[]     : {                                    # 粗章事件链；不绑 c{n}
+    planned_seq: int,
+    event: str,                                              # 因果句，非人设陈列
+    leaves_open[]: str,                                      # 本章未闭合钩子
+    inherits[]: str,                                         # 接住前序 leaves_open 或 spine.*
+    touches_spine: pressure|inciting|midpoint|climax|bridge,
+    pov_focus[]: char_id                                     # 可选
+  }
+  character_targets[] : {char_id, target_state}              # 可选；不替代章间接力
   entries[]           : {char_id, planned_seq}
   exits[]             : {char_id, planned_seq}
-  climax_position     : ...
 ```
 
 ## 约束

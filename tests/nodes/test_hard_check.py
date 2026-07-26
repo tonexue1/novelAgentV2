@@ -10,24 +10,17 @@ from story_engine.primitives.enums import Severity
 from story_engine.primitives.evidence import EvidenceSpan
 from story_engine.schemas.stores.arc import ArcRecord, Knowledge
 from story_engine.schemas.stores.memory import MemoryEntry
-from story_engine.schemas.stores.script import Beat, ChapterScript, Scene
+from story_engine.schemas.stores.script import ChapterScript
 from story_engine.stores.json_backend import JsonStore
+from tests.factories import make_beat, make_chapter_script, make_scene
 
 
 def _script_store(tmp_path):
     s: JsonStore[ChapterScript] = JsonStore(ChapterScript, tmp_path / "script.jsonl", key_field="chapter")
     s.append(
-        ChapterScript(
-            chapter="c12",
-            scenes=[
-                Scene(
-                    scene_id="c12.s3",
-                    beats=[
-                        Beat(beat_id="c12.s3.b1", content="a"),
-                        Beat(beat_id="c12.s3.b2", content="b"),
-                    ],
-                )
-            ],
+        make_chapter_script(
+            "c12",
+            [make_scene("c12.s3", [make_beat("c12.s3.b1", "a"), make_beat("c12.s3.b2", "b")])],
         )
     )
     return s

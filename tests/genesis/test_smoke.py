@@ -28,9 +28,14 @@ def test_genesis_reaches_s0():
     by_kind = {a.kind: a for a in result.arcs}
     assert by_kind["thread"].thread_state == "OPEN"
     assert by_kind["foreshadow"].state == "PLANNED"
+    # G4/G5：首卷大纲 + seed 画像（S₀ 产物清单齐备）
+    assert result.l2 is not None and result.l2.vol_id == "v1"
+    assert result.l2.chapter_beats
+    assert result.profiles and all(p.t_valid == 0 for p in result.profiles)
 
 
 def test_genesis_trace_has_stages():
     result = run_genesis(_seed())
     joined = " ".join(result.trace)
-    assert "G0" in joined and "G1" in joined and "G2" in joined and "G5" in joined
+    for stage in ("G0", "G1", "G2", "G3", "G4", "G5"):
+        assert stage in joined, f"缺阶段 {stage}"

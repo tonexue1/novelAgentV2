@@ -1,18 +1,18 @@
 """Chunker 确定性 UT：scene 对齐、稳定 id、token 计数。"""
 
 from story_engine.nodes.system.chunker import chunk_chapter
-from story_engine.schemas.stores.script import Beat, ChapterScript, Scene
+from tests.factories import make_beat, make_chapter_script, make_scene
 
 
 def _script():
-    return ChapterScript(
-        chapter="c1",
-        scenes=[
-            Scene(scene_id="c1.s1", beats=[
-                Beat(beat_id="c1.s1.b1", content="叶凡走进青云门"),
-                Beat(beat_id="c1.s1.b2", content="他看见了庞博"),
+    return make_chapter_script(
+        "c1",
+        [
+            make_scene("c1.s1", [
+                make_beat("c1.s1.b1", "叶凡走进青云门"),
+                make_beat("c1.s1.b2", "他看见了庞博"),
             ]),
-            Scene(scene_id="c1.s2", beats=[Beat(beat_id="c1.s2.b1", content="夜幕降临")]),
+            make_scene("c1.s2", [make_beat("c1.s2.b1", "夜幕降临")]),
         ],
     )
 

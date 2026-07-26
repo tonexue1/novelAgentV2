@@ -17,6 +17,14 @@
 - [plan-store](../../schema/stores/plan-store.md)：**L0**（独占创立并冻结）+ **L1(v1)** + **L2[卷1]**。
 - 铸 `th.{slug}` / `fs.{slug}` / `char.{slug}` id（→ [ids](../../schema/primitives/ids.md)）。
 
+## L2[卷1] 工序
+
+两段式（同一节点，不同心态），不是一次吐章清单：
+
+1. **Expand-Spine**：`goal` + `thread_targets` + `foreshadow_due` + `volume_spine`（不分章）。
+2. **Expand-Beats**：在脊骨冻结下产 `chapter_beats` 事件链（`event` / `inherits` / `leaves_open` / `touches_spine`）。
+3. **连续性硬检**：接力图与 spine 覆盖失败则重试分章（确定性门禁，非文案禁令）。
+
 ## 交互
 
 - **上游**：人工种子 ⇄ [worldbuilder](./worldbuilder.md)（协同循环）。
@@ -26,3 +34,4 @@
 ## 要害
 
 L0 一旦冻结，改 = 换书。L1 是"意图 vs 实际"漂移度量的意图基准。
+L2 章序列是挂在卷脊骨上的事件链，不是并列人设清单。

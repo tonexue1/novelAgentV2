@@ -10,6 +10,7 @@
 ## 入参
 
 - [plan-store](../../schema/stores/plan-store.md) L0/L1/L2 + L2 派生的 foreshadow due list。
+- **本章事件槽**：`L2.chapter_beats[planned_seq]`（`event` / `inherits` / `leaves_open`）+ `volume_spine`，须承接。
 - [arc-store](../../schema/stores/arc-store.md)：thread 进度、到期/临期伏笔。
 - 最近章摘要（粗）→ [summary-store](../../schema/stores/summary-store.md)。
 - 上下文由 [assembler](../system/assembler.md)←[retriever](../system/retriever.md) 按**粗分辨率**装配。

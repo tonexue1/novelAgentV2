@@ -13,7 +13,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-openai = ["openai>=1.30"]
+openai = [
+    "openai>=1.30",
+    "instructor>=1.0",   # 开源结构化输出：schema 注入 + 校验失败带报错重试（M2 选型）
+]
 dev = [
     "pytest>=8.0",
 ]

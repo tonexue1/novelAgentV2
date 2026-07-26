@@ -109,9 +109,27 @@ class ForeshadowDue(SchemaModel):
     action: Literal["plant", "fulfill"]
 
 
+SpineTouch = Literal["pressure", "inciting", "midpoint", "climax", "bridge"]
+
+
+class VolumeSpine(SchemaModel):
+    """卷级戏剧脊骨：先于分章；人物人设不进这里。"""
+
+    shared_pressure: str
+    inciting: str
+    midpoint: str
+    climax: str
+
+
 class ChapterBeat(SchemaModel):
+    """粗章事件节点（事件链），不绑 c{n}；连续性靠 inherits/leaves_open。"""
+
     planned_seq: int
-    gist: str
+    event: str
+    leaves_open: list[str] = Field(default_factory=list)
+    inherits: list[str] = Field(default_factory=list)
+    touches_spine: SpineTouch = "bridge"
+    pov_focus: list[str] = Field(default_factory=list)
 
 
 class L2(SchemaModel):
@@ -122,4 +140,5 @@ class L2(SchemaModel):
     goal: str | None = None
     thread_targets: list[ThreadTarget] = Field(default_factory=list)
     foreshadow_due: list[ForeshadowDue] = Field(default_factory=list)
+    volume_spine: VolumeSpine | None = None
     chapter_beats: list[ChapterBeat] = Field(default_factory=list)

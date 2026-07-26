@@ -6,8 +6,8 @@ from story_engine.nodes.system.applier import Applier
 from story_engine.schemas.artifacts.recorder_output import ArcOp, MemOp, RecorderOutput
 from story_engine.schemas.stores.arc import ArcRecord
 from story_engine.schemas.stores.memory import MemoryEntry
-from story_engine.schemas.stores.script import Beat, ChapterScript, Scene
 from story_engine.stores.json_backend import JsonStore
+from tests.factories import make_beat, make_chapter_script, make_scene
 
 
 def _stores(tmp_path):
@@ -17,11 +17,11 @@ def _stores(tmp_path):
 
 
 def test_assign_beat_ids():
-    script = ChapterScript(
-        chapter="c5",
-        scenes=[
-            Scene(scene_id="c5.s1", beats=[Beat(beat_id="tmp", content="a"), Beat(beat_id="tmp", content="b")]),
-            Scene(scene_id="c5.s2", beats=[Beat(beat_id="tmp", content="c")]),
+    script = make_chapter_script(
+        "c5",
+        [
+            make_scene("c5.s1", [make_beat("tmp", "a"), make_beat("tmp", "b")]),
+            make_scene("c5.s2", [make_beat("tmp", "c")]),
         ],
     )
     Applier().assign_beat_ids(script)

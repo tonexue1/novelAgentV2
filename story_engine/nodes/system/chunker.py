@@ -25,7 +25,7 @@ class Chunk:
 def chunk_chapter(script: ChapterScript) -> list[Chunk]:
     chunks: list[Chunk] = []
     for scene in script.scenes:
-        text = "\n".join(b.content for b in scene.beats)
+        text = "\n".join(b.as_text() for b in scene.beats)
         chunks.append(
             Chunk(
                 chunk_id=scene.scene_id,

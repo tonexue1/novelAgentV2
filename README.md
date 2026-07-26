@@ -21,17 +21,45 @@
 
 - [docs/FOUNDATION.md](docs/FOUNDATION.md) —— 理论基础 / 心智模型（受控递推的第一性原理，所有架构决策的根据）。
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) —— 架构设计基线（存储层、数据流、节点划分、剧本 schema、记忆规范、检索规范、设计取舍）。
+- [docs/ROADMAP.md](docs/ROADMAP.md) —— 里程碑与建造顺序。
 
 ## 状态
 
-**M0 地基脚手架已落地**（见 [docs/ROADMAP.md](docs/ROADMAP.md)）：原语（id/EvidenceSpan/枚举）、schema 模型、JSON Store（含 as-of）、LLM 封装（结构化输出+成本记账）、telemetry 留痕、Genesis Gate 确定性检查、创世/单章 orchestrator 骨架，`pytest` 全绿。下一步：M1 确定性内核 → M2 单章垂直切片。
+**M0 ✅ + M1 ✅ + M2 ✅ 已落地**（见 [docs/ROADMAP.md](docs/ROADMAP.md)）：
+原语 / schema / JSON Store / telemetry / Genesis Gate / Applier / Hard-Check /
+Retriever（BM25）/ Chunker / Temporal；LLM（DeepSeek + instructor）；
+创世 → Planner → Director → Character → Script → Writer → Extractor →
+Faithfulness → Reconciler → Applier。走查：`uv run python scripts/walk.py` /
+`auto --chapters N`（可跳过 Writer）。`pytest` 全绿。
+**下一步：M3 递推闭环**（真检索装配、一致性闸、升级阶梯）。
 
 ## 开发
 
 ```bash
-python -m uv venv           # 建虚拟环境
-python -m uv pip install pydantic pydantic-settings pytest
-python -m pytest            # 全绿
+uv venv
+uv pip install -e ".[dev]"          # UT
+uv pip install -e ".[openai,dev]"   # 真 LLM（DeepSeek 等）
+uv run pytest                       # 全绿（默认 mock，不打网）
+```
+
+### 模型配置（走 env）
+
+复制 [`.env.example`](.env.example) 为 `.env`，填 key 即可。常用变量：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `STORY_LLM_PROVIDER` | `mock` | `mock` \| `openai`（OpenAI 兼容端点） |
+| `STORY_LLM_MODEL` | `deepseek-v4-pro` | 默认模型 |
+| `STORY_OPENAI_API_KEY` | — | API key |
+| `STORY_OPENAI_BASE_URL` | `https://api.deepseek.com` | 兼容端点 |
+| `STORY_LLM_MAX_RETRIES` | `2` | 结构化输出重试次数 |
+| `STORY_LLM_NODE_MODELS` | `{}` | JSON，如 `{"writer":"kimi-k3"}` |
+
+真端点冒烟（不进 pytest）：
+
+```bash
+# .env 里 STORY_LLM_PROVIDER=openai + STORY_OPENAI_API_KEY=...
+uv run python scripts/llm_smoke.py
 ```
 
 包结构与 `docs/` 一一对应：`primitives ↔ schema/primitives`、`schemas ↔ schema/stores+artifacts`、`nodes ↔ docs/nodes`。

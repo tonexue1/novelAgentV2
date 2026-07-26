@@ -10,8 +10,9 @@ from story_engine.primitives.evidence import EvidenceSpan
 from story_engine.schemas.artifacts.recorder_output import MemOp, RecorderOutput
 from story_engine.schemas.stores.arc import ArcRecord
 from story_engine.schemas.stores.memory import MemoryEntry
-from story_engine.schemas.stores.script import Beat, ChapterScript, Scene
+from story_engine.schemas.stores.script import ChapterScript
 from story_engine.stores.json_backend import JsonStore
+from tests.factories import make_beat, make_chapter_script, make_scene
 
 
 def test_deterministic_half_composes(tmp_path):
@@ -23,11 +24,11 @@ def test_deterministic_half_composes(tmp_path):
     ap = Applier()
 
     # 1) beat 定序 + 提交 ScriptStore（主真相）
-    script = ChapterScript(
-        chapter="c1",
-        scenes=[Scene(scene_id="c1.s1", beats=[
-            Beat(beat_id="tmp", content="叶凡拜入青云门"),
-            Beat(beat_id="tmp", content="立誓为父报仇"),
+    script = make_chapter_script(
+        "c1",
+        [make_scene("c1.s1", [
+            make_beat("tmp", "叶凡拜入青云门"),
+            make_beat("tmp", "立誓为父报仇"),
         ])],
     )
     ap.assign_beat_ids(script)
