@@ -70,7 +70,8 @@ instructor 内部自修复重试的中间尝试不单独写 RunRecord（末次 u
 ## 待办回收（挂在各里程碑下）
 
 - ~~**M2**：节点真 LLM prompt + orchestrator 接线（含 Reconciler）~~ ✅。
-- **M3**：真检索（画像+预算）；Character 逐拍 turn 编排与同角色上下文缓存；dispatch 小模型选型与快检规则；一致性闸全链 + 各级硬检规则清单 + 重试预算 / 升级阶梯。
+- ~~**M3**：Assembler 画像+预算；一致性闸（硬检两检点 + Critic + 升级阶梯）；staged 过闸入库；walk 检查点接续；高频节点 flash+关推理~~ ✅。dispatch 快检归入硬检；**dispatch 小模型选型**移交 M6（`node_profiles` 已起）。
 - **M4**：卷复盘漂移度量阈值 + "L2 修正 vs L1 修订"触发判据；summary 构建时机与工作缓冲编排；world entity minor→晋升触发信号（复现/跨场景/salience 超阈）；Retriever 分桶语义与 §8.2 重对齐。
 - **M5**：GenesisGap 清单 schema（创世 Gate 失败载体）✅ 已有；Genesis Gate UT 实装 ✅；LLM-judge 校准金标集；E 记账是否计入 instructor 内部重试。
+- **M6**：多模型分层打磨（规划 thinking、Critic 严重度标定）；成本优化/缓存；遮天规模整本。
 - **M0**：Python 模块划分定稿；~~LLM provider~~ ✅（DeepSeek + instructor，env 配置）；向量库 / embedding /（未来）VLM 仍挂。
