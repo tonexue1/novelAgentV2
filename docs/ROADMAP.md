@@ -11,7 +11,7 @@
 | **M0 ✅** | 地基脚手架 | Python 包结构（primitives/schemas/stores/llm/nodes/orchestrator/telemetry）、原语代码化（id / EvidenceSpan / StoryTime / 枚举）、Store 抽象层（JSON + as-of）、LLM 客户端封装（结构化输出 + 重试 + 成本记账）、telemetry 留痕、Orchestrator 骨架 | 能跑空流程（27 UT 全绿） | 低 |
 | **M1 ✅** | 确定性内核（无 LLM） | Applier（beat 定序 + 软失效 + arc 状态机）/ Hard-Check（evidence 可解析 / 修为单调 / secret 边界）/ Retriever（规则版 filter→rank→budget，BM25+tiktoken）/ Chunker + Temporal mixin + **Genesis Gate 闭包检查** + 确定性 UT 批 | 46 UT 全绿；检索质量+修为单调标杆落地 | 低 |
 | **M2 ✅** | 单章垂直切片 | 创世最小版（seed→L0/L1→Gate→S₀）→ Planner→Director→Character→Script→Writer→Extractor→Faithfulness→Reconciler→Applier；L2 卷脊骨+事件链；walk / `auto` 批跑 | **端到端连出第 1、2 章**（假 LLM UT + 真跑；第 2 章验对账）；真跑可连多章（Writer 可跳过） | 中 |
-| **M3** | 递推闭环 | 真检索（画像+预算）、Character 逐拍 dispatch（定锚不定序+handoff）、一致性闸全链（升级阶梯+重试）、Faithfulness Check | **连跑 N 章不崩** | 高 |
+| **M3 ✅** | 递推闭环 | Assembler 节点画像+Retriever 预算；StagedScriptView；逐拍/场级硬检 + Continuity Critic；Consistency Gate 升级阶梯（过闸才入库）；walk 检查点/rollback/continue；节点 LLM 分层（flash+关推理）+ 本地 reader | **连跑 N 章不崩**（闸接上；批跑可接续） | 高 |
 | **M4** | 长程/规划 | Summarizer 多分辨率摘要、Embedder+向量库、Replanner 卷复盘+漂移度量、伏笔状态机全生命周期、re-tiering/晋升、rolling horizon | **跑到卷级/百章** | 最高 |
 | **M5** | 评估 harness | E 记账 → 🟢第一批指标（C2/D2/A3/C4/B3）→ 🟡阈值评测集+judge 校准 → 🔴金标/合成探针（D1）→ 回归 CI | 尺子上线 | 中 |
 | **M6** | 打磨产品化 | 多模型分层选型（大模型规划/小模型 dispatch）、成本优化/缓存、跑完"遮天规模"整本、(未来)VLM/MediaStore | 成品 | 中 |
@@ -54,7 +54,8 @@ instructor 内部自修复重试的中间尝试不单独写 RunRecord（末次 u
 1. ~~**M0 最小骨架**~~ ✅
 2. ~~**M1 Genesis Gate + 确定性 UT**~~ ✅
 3. ~~**M2 最细一条线**~~ ✅：`seed → 创世 → 第 1、2 章`（含 Reconciler）；walk / `auto --chapters N` 可批跑。
-4. **下一步 M3 递推闭环**：真检索装配、一致性闸全链（Critic + 升级阶梯）、连跑 N 章不崩。
+4. ~~**M3 递推闭环**~~ ✅：Assembler + 一致性闸全链 + staged 过闸入库；walk `rollback`/`continue`；`python -m story_engine.llm` 查节点配置。
+5. **下一步 M4 长程/规划**：Summarizer / Embedder / Replanner 卷复盘；同角色上下文缓存；WorldOp 落库。
 
 ---
 

@@ -46,7 +46,11 @@ def test_evidence_unresolvable_blocks(tmp_path):
     vios = check_evidence_resolvable([mem], ss, chapter=12)
     assert len(vios) == 1
     assert vios[0].severity == Severity.BLOCK
-    assert vios[0].rule == "evidence_resolvable"
+    assert vios[0].category == "ref_integrity"
+    assert vios[0].check_type == "hard"
+    assert "evidence_resolvable" in vios[0].message
+    assert vios[0].resolution == "open"
+    assert [s.to_str() for s in vios[0].script_evidence] == ["c12.s3.b9"]
 
 
 def test_ability_monotonic_violation(tmp_path):
@@ -57,7 +61,8 @@ def test_ability_monotonic_violation(tmp_path):
     vios = check_ability_monotonic(mem, "char.x", chapter=20)
     assert len(vios) == 1
     assert vios[0].severity == Severity.BLOCK
-    assert "倒退" in vios[0].detail
+    assert vios[0].category == "ability"
+    assert "倒退" in vios[0].message
 
 
 def test_ability_monotonic_ok(tmp_path):
@@ -84,6 +89,8 @@ def test_secret_boundary(tmp_path):
     # ye_fan 不在知情名单 → 认知边界穿帮
     vios = check_secret_boundary("char.ye_fan", ["sec.blood"], arc, chapter=15)
     assert len(vios) == 1 and vios[0].severity == Severity.CORRECT
+    assert vios[0].category == "POV"
+    assert vios[0].refs == ["char.ye_fan", "sec.blood"]
     # 知情者不触发
     assert check_secret_boundary("char.pang_bo", ["sec.blood"], arc, chapter=15) == []
 

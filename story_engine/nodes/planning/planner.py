@@ -54,6 +54,8 @@ class Planner:
         arcs: list[ArcRecord] | None = None,
         due_foreshadows: list[str] | None = None,
         recent_summaries: list[str] | None = None,
+        retrieved: list[str] | None = None,
+        violations: str | None = None,
     ) -> ChapterPlan:
         if ctx.llm is None:
             raise ValueError("Planner 需要 LLMClient")
@@ -76,6 +78,8 @@ class Planner:
                 ("台账实际进度（伏笔/主线当前状态）", as_json(arcs or [], limit=2000)),
                 ("到期/逾期待收伏笔", as_json(due_foreshadows or [])),
                 ("最近章摘要（防重复、接上文）", as_json(recent_summaries or [])),
+                ("既有事实与线索（as-of 检索，粗画像）", as_json(retrieved or [], limit=2000)),
+                ("上一轮本章被闸门拦下的违规（重规划必须避开）", violations or ""),
                 ("本章章号", f"第 {chapter} 章"),
             ],
         )

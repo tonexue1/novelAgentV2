@@ -66,13 +66,15 @@ class LLMClient:
         max_retries: int = 2,
         node_models: dict[str, str] | None = None,
         on_prompt: PromptHook | None = None,
+        profile_resolver=None,
     ) -> None:
         self._provider = provider
         self._telemetry = telemetry
         self._max_retries = max_retries
-        # per-node 模型覆盖（M2 选型预留：复杂 schema 节点可单独换模型）
+        # 兼容旧调用；有 profile_resolver 时以表为准，node_models 已折进 resolver
         self._node_models = node_models or {}
         self._on_prompt = on_prompt
+        self._profiles = profile_resolver
 
     def complete_structured(
         self,
@@ -90,8 +92,7 @@ class LLMClient:
         否则走下方手搓 parse 循环（Mock / 测试路径）。
         """
         self._emit_prompt(node, prompt)
-        if node in self._node_models:
-            cfg.setdefault("model", self._node_models[node])
+        cfg = self._apply_node_profile(node, cfg)
 
         native = getattr(self._provider, "complete_structured", None)
         if callable(native):
@@ -106,7 +107,7 @@ class LLMClient:
             latency_ms = (time.perf_counter() - t0) * 1000
             try:
                 obj = response_model.model_validate_json(comp.text)
-                self._log(node, chapter, comp, latency_ms, verdict="PASS")
+                self._log(node, chapter, comp, latency_ms, verdict="PASS", cfg=cfg)
                 return obj
             except Exception as e:  # noqa: BLE001 - 校验失败重试
                 last_err = e
@@ -114,6 +115,7 @@ class LLMClient:
                     node, chapter, comp, latency_ms,
                     verdict=f"PARSE_FAIL(attempt={attempt})",
                     note=str(e)[:200],
+                    cfg=cfg,
                 )
         raise ValueError(
             f"[{node}] 结构化输出校验失败（重试 {self._max_retries} 次）: {last_err}"
@@ -132,12 +134,26 @@ class LLMClient:
         生产层节点之间一律走 complete_structured——自然语言只存在于成品和例句里。
         """
         self._emit_prompt(node, prompt)
-        if node in self._node_models:
-            cfg.setdefault("model", self._node_models[node])
+        cfg = self._apply_node_profile(node, cfg)
         t0 = time.perf_counter()
         comp = self._provider.complete(prompt, **cfg)
-        self._log(node, chapter, comp, (time.perf_counter() - t0) * 1000, verdict="PASS")
+        self._log(
+            node, chapter, comp, (time.perf_counter() - t0) * 1000,
+            verdict="PASS", cfg=cfg,
+        )
         return comp.text
+
+    def _apply_node_profile(self, node: str, cfg: dict[str, object]) -> dict[str, object]:
+        """按节点配置表注入 model / thinking（调用方显式传入的优先）。"""
+        out = dict(cfg)
+        if self._profiles is not None:
+            profile = self._profiles.resolve(node)
+            out.setdefault("model", profile.model)
+            if profile.thinking != "inherit":
+                out.setdefault("thinking", profile.thinking)
+        elif node in self._node_models:
+            out.setdefault("model", self._node_models[node])
+        return out
 
     def _emit_prompt(self, node: str, prompt: str) -> None:
         if self._on_prompt is not None:
@@ -166,10 +182,11 @@ class LLMClient:
                 latency_ms,
                 verdict="STRUCTURED_FAIL",
                 note=str(e)[:200],
+                cfg=cfg,
             )
             raise
         latency_ms = (time.perf_counter() - t0) * 1000
-        self._log(node, chapter, comp, latency_ms, verdict="PASS")
+        self._log(node, chapter, comp, latency_ms, verdict="PASS", cfg=cfg)
         return obj  # type: ignore[return-value]
 
     def _log(
@@ -181,19 +198,25 @@ class LLMClient:
         *,
         verdict: str | None = None,
         note: str | None = None,
+        cfg: dict[str, object] | None = None,
     ) -> None:
         if not self._telemetry:
             return
+        bits = []
+        if cfg and cfg.get("thinking"):
+            bits.append(f"thinking={cfg['thinking']}")
+        if note:
+            bits.append(note)
         self._telemetry.record(
             RunRecord(
                 node=node,
                 chapter=chapter,
-                model=comp.model,
+                model=comp.model or (str(cfg.get("model")) if cfg and cfg.get("model") else None),
                 prompt_tokens=comp.prompt_tokens,
                 completion_tokens=comp.completion_tokens,
                 cost_usd=_estimate_cost(comp.prompt_tokens, comp.completion_tokens),
                 latency_ms=latency_ms,
                 verdict=verdict,
-                note=note,
+                note="; ".join(bits) or None,
             )
         )

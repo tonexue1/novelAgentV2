@@ -26,8 +26,13 @@ class Settings(BaseSettings):
     llm_provider: str = "mock"         # mock | openai（OpenAI 兼容端点，含 DeepSeek）
     llm_model: str = "deepseek-v4-pro"
     llm_max_retries: int = 2
-    # per-node 模型覆盖；env 用 JSON：STORY_LLM_NODE_MODELS={"writer":"kimi-k3"}
+    # per-node 覆盖（JSON）。权威默认档在 llm/node_profiles.py；此处只覆盖。
+    # 一键可查：uv run python -m story_engine.llm
+    # STORY_LLM_NODE_MODELS={"character":"deepseek-v4-flash"}
     llm_node_models: dict[str, str] = Field(default_factory=dict)
+    # STORY_LLM_NODE_THINKING={"planner":"enabled","character":"disabled"}
+    # 取值：enabled | disabled | inherit（不传，跟 API 默认）
+    llm_node_thinking: dict[str, str] = Field(default_factory=dict)
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.deepseek.com"
 

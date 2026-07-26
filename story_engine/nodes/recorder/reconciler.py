@@ -43,6 +43,12 @@ _TASK = """逐条决定写回动作：
 - evidence 原样保留，不要改写。"""
 
 _KIND_PREFIX = {"foreshadow": "fs", "secret": "sec", "thread": "th"}
+# op ↔ kind 兼容表（与 Applier 状态机对齐）；不合规的一律降 NOOP
+_OPS_BY_KIND = {
+    "foreshadow": frozenset({"PLANT", "REINFORCE", "FULFILL", "ABANDON", "NOOP"}),
+    "secret": frozenset({"PLANT", "REINFORCE", "FULFILL", "ABANDON", "REVEAL", "NOOP"}),
+    "thread": frozenset({"ADVANCE", "CLIMAX", "RESOLVE", "DROP", "NOOP"}),
+}
 
 
 @dataclass
@@ -94,7 +100,10 @@ class Reconciler:
             coerced.extend(mem_coerced)
             mem_ops = self._dedupe(mem_ops, related, coerced)
 
-        arc_ops, arc_coerced = self._sanitize_arcs(candidates.arc_ops, known_arcs)
+        known_kinds = {a.id: a.kind for a in arcs}
+        arc_ops, arc_coerced = self._sanitize_arcs(
+            candidates.arc_ops, known_arcs, known_kinds
+        )
         coerced.extend(arc_coerced)
         return ReconcileResult(
             output=RecorderOutput(
@@ -129,9 +138,13 @@ class Reconciler:
         return out, coerced
 
     def _sanitize_arcs(
-        self, ops: list[ArcOp], known_ids: set[str]
+        self,
+        ops: list[ArcOp],
+        known_ids: set[str],
+        known_kinds: dict[str, str] | None = None,
     ) -> tuple[list[ArcOp], list[dict]]:
-        """幽灵弧线 id：补前缀；库中不存在且未标 is_new → 升为涌现提名（is_new+draft）。"""
+        """幽灵 id / 错配 op：补前缀、升涌现、按 kind 拦非法转移，绝不放给 Applier。"""
+        known_kinds = dict(known_kinds or {})
         out: list[ArcOp] = []
         coerced: list[dict] = []
         for op in ops:
@@ -162,9 +175,22 @@ class Reconciler:
                     "to": "default",
                     "reason": f"is_new 缺 draft，补默认: {tid}",
                 })
-            out.append(op.model_copy(update=updates) if updates else op)
+            kind = known_kinds.get(tid) or updates.get("kind") or op.kind
             if tid not in known_ids:
-                known_ids = known_ids | {tid}  # 同批后续可引用
+                # 涌现：以 op.kind 为准（或 draft），记进本批 kind 表
+                kind = op.kind
+                known_kinds[tid] = kind
+                known_ids = known_ids | {tid}
+            allowed = _OPS_BY_KIND.get(kind, frozenset({"NOOP"}))
+            final_op = op.op
+            if final_op not in allowed:
+                coerced.append({
+                    "from": final_op,
+                    "to": "NOOP",
+                    "reason": f"op {final_op} 不适用于 {kind}（{tid}）",
+                })
+                updates["op"] = "NOOP"
+            out.append(op.model_copy(update=updates) if updates else op)
         return out, coerced
 
     def _dedupe(

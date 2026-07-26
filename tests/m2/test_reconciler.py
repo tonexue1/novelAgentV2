@@ -151,3 +151,35 @@ def test_ghost_arc_without_is_new_promoted_to_emergent(tmp_path):
     assert any(c.get("to") == "is_new" for c in res.coerced)
     Applier().apply_recorder_output(res.output, mem, arc)
     assert arc.get("fs.foreshadow_cross_path_ch3") is not None
+
+
+def test_thread_op_on_foreshadow_coerced_to_noop(tmp_path):
+    """Extractor 对伏笔误发 ADVANCE（thread 专用）→ 降 NOOP，不炸 Applier。"""
+    mem: JsonStore[MemoryEntry] = JsonStore(MemoryEntry, tmp_path / "m.jsonl", key_field="id")
+    arc: JsonStore[ArcRecord] = JsonStore(ArcRecord, tmp_path / "a.jsonl", key_field="id")
+    arc.append(
+        ArcRecord(id="fs.debt", kind="foreshadow", state="PLANTED", desc="欠债", origin="planned")
+    )
+    candidates = RecorderOutput(
+        chapter=3,
+        arc_ops=[
+            ArcOp(
+                target_id="fs.debt",
+                kind="foreshadow",
+                op="ADVANCE",
+                milestone="被骗加深",
+                evidence=[EvidenceSpan.parse("c3.s1.b1")],
+            )
+        ],
+    )
+    res = Reconciler().reconcile(
+        ctx=NodeContext(llm=None),
+        chapter=3,
+        candidates=candidates,
+        related=[],
+        arcs=arc.all(),
+    )
+    assert res.output.arc_ops[0].op == "NOOP"
+    assert any("不适用于 foreshadow" in c.get("reason", "") for c in res.coerced)
+    Applier().apply_recorder_output(res.output, mem, arc)
+    assert arc.get("fs.debt").state == "PLANTED"

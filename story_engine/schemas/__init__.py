@@ -40,7 +40,7 @@ from story_engine.schemas.stores.script import (
     SceneCast,
     Thought,
 )
-from story_engine.schemas.stores.violation import Violation
+from story_engine.schemas.stores.violation import EscalationStep, Locus, Violation
 from story_engine.schemas.stores.world import WorldEntity
 
 __all__ = [
@@ -83,5 +83,7 @@ __all__ = [
     "SceneBudget",
     "BeatDispatch",
     "Violation",
+    "Locus",
+    "EscalationStep",
     "WorldEntity",
 ]

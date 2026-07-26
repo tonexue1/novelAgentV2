@@ -14,12 +14,15 @@
 用法：
   uv run python scripts/walk.py status
   uv run python scripts/walk.py run g0
-  uv run python scripts/walk.py run g1
-  uv run python scripts/walk.py show g1          # 列出该步 context + out
-  uv run python scripts/walk.py show g1.context  # 只看上下文
-  uv run python scripts/walk.py show g1.out      # 只看产物
+  uv run python scripts/walk.py show g1.context
   uv run python scripts/walk.py auto --chapters 3
-      # 创世齐备后连跑 N 章（默认跳过 Writer）；产物在 chapters/c{n}/
+      # 干净重跑 1…N（重种 stores）；章末写 checkpoints/c{n}/
+  uv run python scripts/walk.py rollback --to 1
+      # 世界回到第 1 章末；--to 0 = 回到 G5、清全部章
+  uv run python scripts/walk.py continue --chapters 10
+      # 从下一章接到 10（不重种）
+  uv run python scripts/walk.py continue --from 2 --chapters 10
+      # 先 rollback 到 1，再跑 2…10
   uv run python scripts/walk.py reset
 
 需要 .env：STORY_LLM_PROVIDER=openai + STORY_OPENAI_API_KEY（g0/g3/script 除外）。
@@ -47,13 +50,13 @@ from story_engine.nodes.production.director import DirectorDispatch, DirectorSet
 from story_engine.nodes.recorder.extractor import Extractor
 from story_engine.nodes.recorder.reconciler import Reconciler
 from story_engine.nodes.system.applier import Applier
+from story_engine.nodes.system.assembler import Assembler
 from story_engine.nodes.validation.faithfulness_check import FaithfulnessCheck
 from story_engine.nodes.validation.genesis_gate import check_closure
 from story_engine.orchestrator.loop import (
     _DEFAULT_MAX_BEATS,
     _brief_memories,
     _due_foreshadows,
-    _known_facts,
     _recent_tails,
     _related_memories,
     _to_scene,
@@ -78,8 +81,16 @@ ROOT = Path("data/walk")
 STEPS_DIR = ROOT / "steps"
 STORES_DIR = ROOT / "stores"
 CHAPTERS_DIR = ROOT / "chapters"
+CHECKPOINTS_DIR = ROOT / "checkpoints"
 CHAPTER = 1
 GENESIS_STEPS = ("g0", "g1", "g2", "g3", "g4", "g5")
+_STORE_FILES = (
+    "script.jsonl",
+    "mem.jsonl",
+    "arc.jsonl",
+    "manuscript.jsonl",
+    "violation.jsonl",
+)
 
 # (step_id, folder_name, description)
 STEPS: list[tuple[str, str, str]] = [
@@ -119,26 +130,26 @@ DONE_FILE = {
 }
 
 DEFAULT_SEED = Seed(
-    logline="两个男人在寻常日子里靠近、试探、相爱，又在偏见、自我与现实选择里反复拉扯",
-    genre=["都市", "同性爱情", "成长"],
-    tone=["细腻", "克制", "温暖中带刺"],
+    logline="辍学青年从社会底层起步，一步步登顶黑道教父的故事",
+    genre=["都市", "黑道", "成长", "权力博弈"],
+    tone=["冷硬", "克制", "残酷中带人情"],
     ending_intent=(
-        "两人最终以彼此能承受的方式确认这段关系——"
-        "不必迎合外界剧本，但必须对自己诚实"
+        "主角登顶黑道金字塔，却发现王座上只剩孤立与代价——"
+        "权力到手，人情、自由与旧日自我都被抵押干净"
     ),
     protagonist_intent=[
-        "敢不敢承认自己的心意",
-        "想被好好爱，也想好好爱人",
-        "在亲密关系里学会边界与责任",
-        "找到能安放这段感情的生活形状",
+        "从被人踩的辍学少年变成能定生死的人",
+        "护住几个真正在乎的人，哪怕手段脏",
+        "在刀口上活下去，并学会把规矩握在自己手里",
+        "搞清楚登顶到底是为了报复、生存，还是证明自己",
     ],
     hard_rules=[
-        "感情推进靠具体相处与选择，不靠误会堆叠或突然失忆式狗血",
-        "外部压力可以存在，但不写成单一反派脸谱；人物自己的恐惧与退缩同样是阻力",
-        "性爱若出现，服务于人物关系与情绪，不作猎奇展示",
-        "主题（如何相爱、如何安放）晚于具体生活琐事亮相：先写遇见与日常",
+        "权力推进靠具体利益、人情债与暴力后果，不靠突然开挂或无代价逆袭",
+        "反派与对手有自己的地盘逻辑，不写成单一脸谱；主角自己的贪婪与恐惧也是阻力",
+        "暴力若出现，服务于人物选择与势力消长，不作猎奇堆尸",
+        "主题（权力的代价）晚于具体生存与攀爬亮相：先写街头、饭碗与小局",
     ],
-    refs=["都市同性爱情：先日常与靠近，身份认同与终局选择压到中后段"],
+    refs=["都市黑道成长：先底层生存与小局站队，登顶与代价压到中后段"],
 )
 
 # 当前正在跑的步骤（供 prompt hook 落盘）
@@ -525,7 +536,10 @@ def step_act() -> None:
                 chapter=CHAPTER,
                 dispatch=dispatch,
                 contract=contract,
-                known_facts=_known_facts(mem, dispatch.owner, CHAPTER),
+                known_facts=Assembler().known_facts(
+                    char=dispatch.owner, chapter=CHAPTER, mem_store=mem,
+                    focus=dispatch.dramatic_goal,
+                ),
                 buffer=buffer,
             )
             buffer.append(beat)
@@ -705,7 +719,20 @@ def cmd_status() -> None:
         print(f"审视上下文：uv run python scripts/walk.py show {pending[0]}.context")
         print(f"         或直接打开 steps/{STEP_META[pending[0]][0]}/context/")
     else:
-        print("全部完成。")
+        print("创世/分步走查：全部完成。")
+    last_cp = _latest_checkpoint()
+    last_script = _latest_script_chapter()
+    print()
+    cp_label = f"c{last_cp}" if last_cp else "无"
+    sc_label = f"c{last_script}" if last_script else "无"
+    print(f"章进度：stores 最大章={sc_label}  检查点={cp_label}")
+    print("接续：  uv run python scripts/walk.py continue --chapters 10")
+    if last_cp:
+        print(f"回滚：  uv run python scripts/walk.py rollback --to {last_cp}")
+    elif last_script:
+        print(
+            f"无检查点；可先 seal：uv run python scripts/walk.py checkpoint --seal {last_script}"
+        )
 
 
 def cmd_run(step: str) -> None:
@@ -777,7 +804,7 @@ def _ensure_genesis(*, do_genesis: bool) -> None:
 def _reseed_stores_from_g5() -> None:
     """章批跑前：清 Script/正文，Mem/Arc 重置为 G5 创世态（避免旧章污染）。"""
     STORES_DIR.mkdir(parents=True, exist_ok=True)
-    for name in ("script.jsonl", "manuscript.jsonl", "mem.jsonl", "arc.jsonl"):
+    for name in _STORE_FILES:
         p = STORES_DIR / name
         if p.exists():
             p.unlink()
@@ -797,13 +824,203 @@ def _chapter_dump_dir(n: int) -> Path:
     return d
 
 
+# ── 检查点 / 回滚 / 接续 ───────────────────────────────────────
+
+
+def _checkpoint_dir(n: int) -> Path:
+    return CHECKPOINTS_DIR / mint_chapter(n)
+
+
+def _latest_checkpoint() -> int | None:
+    if not CHECKPOINTS_DIR.exists():
+        return None
+    nums = []
+    for d in CHECKPOINTS_DIR.iterdir():
+        if d.is_dir() and d.name.startswith("c") and (d / "meta.json").exists():
+            try:
+                nums.append(int(d.name[1:]))
+            except ValueError:
+                continue
+    return max(nums) if nums else None
+
+
+def _latest_script_chapter() -> int | None:
+    path = STORES_DIR / "script.jsonl"
+    if not path.exists():
+        return None
+    nums = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        ch = json.loads(line).get("chapter") or ""
+        if isinstance(ch, str) and ch.startswith("c"):
+            try:
+                nums.append(int(ch[1:]))
+            except ValueError:
+                continue
+    return max(nums) if nums else None
+
+
+def _save_checkpoint(n: int, *, consistency_status: str | None = None) -> Path:
+    """把当前 stores 整份拷到 checkpoints/c{n}/（章末过闸后调用）。"""
+    dest = _checkpoint_dir(n)
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    STORES_DIR.mkdir(parents=True, exist_ok=True)
+    for name in _STORE_FILES:
+        src = STORES_DIR / name
+        if src.exists():
+            shutil.copy2(src, dest / name)
+        else:
+            (dest / name).write_text("", encoding="utf-8")
+    meta = {
+        "chapter": n,
+        "consistency_status": consistency_status,
+        "files": [f for f in _STORE_FILES if (dest / f).stat().st_size > 0],
+    }
+    (dest / "meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"  ↳ checkpoint c{n}/")
+    return dest
+
+
+def _restore_checkpoint(n: int) -> None:
+    src = _checkpoint_dir(n)
+    if not (src / "meta.json").exists():
+        raise SystemExit(
+            f"没有检查点 checkpoints/c{n}/。\n"
+            f"若 stores 已停在 c{n} 末，可：uv run python scripts/walk.py checkpoint --seal {n}\n"
+            f"或重跑 auto 让章末自动打点。"
+        )
+    STORES_DIR.mkdir(parents=True, exist_ok=True)
+    for name in _STORE_FILES:
+        dst = STORES_DIR / name
+        piece = src / name
+        if piece.exists() and piece.stat().st_size > 0:
+            shutil.copy2(piece, dst)
+        elif dst.exists():
+            dst.unlink()
+    print(f"stores 已恢复为 checkpoint c{n}")
+
+
+def _purge_chapters_after(n: int) -> list[str]:
+    """删掉 chapters/c{n+1}… 与 checkpoints/c{n+1}…。n=0 时全清。"""
+    removed: list[str] = []
+    for base in (CHAPTERS_DIR, CHECKPOINTS_DIR):
+        if not base.exists():
+            continue
+        for d in list(base.iterdir()):
+            if not d.is_dir() or not d.name.startswith("c"):
+                continue
+            try:
+                num = int(d.name[1:])
+            except ValueError:
+                continue
+            if num > n:
+                shutil.rmtree(d)
+                removed.append(str(d.relative_to(ROOT)))
+    return removed
+
+
+def _seal_checkpoint_from_stores(n: int) -> Path:
+    """把当前 stores 封成 c{n} 检查点（迁移旧跑、手动对齐用）。"""
+    last = _latest_script_chapter()
+    if last != n:
+        raise SystemExit(
+            f"拒绝 seal c{n}：stores 最大章是 c{last or 0}，须恰好为 c{n}"
+        )
+    return _save_checkpoint(n, consistency_status="sealed")
+
+
+def cmd_checkpoint(*, seal: int | None) -> None:
+    if seal is None:
+        last = _latest_checkpoint()
+        print(f"最近检查点：c{last or 0}（目录 {CHECKPOINTS_DIR}）")
+        print("封存当前 stores：uv run python scripts/walk.py checkpoint --seal N")
+        return
+    if seal < 1:
+        raise SystemExit("--seal 须 ≥ 1")
+    _seal_checkpoint_from_stores(seal)
+    print(f"已 seal checkpoint c{seal}")
+
+
+def cmd_rollback(*, to: int, keep_dumps: bool) -> None:
+    """回到第 to 章末。to=0 → 重种 G5，清全部章与检查点。"""
+    if to < 0:
+        raise SystemExit("--to 须 ≥ 0")
+    _ensure_genesis(do_genesis=False)
+    if to == 0:
+        _reseed_stores_from_g5()
+        removed = _purge_chapters_after(0)
+        print("已回滚到 G5（无章）")
+        if removed:
+            print("已删：", ", ".join(removed))
+        return
+    _restore_checkpoint(to)
+    if not keep_dumps:
+        removed = _purge_chapters_after(to)
+        if removed:
+            print("已删：", ", ".join(removed))
+    print(f"世界停在 c{to} 末。下一步可：continue --from {to + 1}")
+
+
+def cmd_continue(
+    *,
+    chapters: int,
+    no_writer: bool,
+    from_chapter: int | None,
+) -> None:
+    """接续重跑。--from K 隐含 rollback 到 K-1 再跑 K…chapters。"""
+    if chapters < 1:
+        raise SystemExit("--chapters 至少为 1")
+    _ensure_genesis(do_genesis=False)
+
+    if from_chapter is not None:
+        if from_chapter < 1:
+            raise SystemExit("--from 须 ≥ 1")
+        start = from_chapter
+        # 隐含：先回到上一章末（from=1 → G5）
+        cmd_rollback(to=start - 1, keep_dumps=False)
+    else:
+        last = _latest_script_chapter() or 0
+        start = last + 1
+        if start > 1 and not (_checkpoint_dir(start - 1) / "meta.json").exists():
+            # stores 已在 start-1 末且无检查点 → 自动 seal，便于旧跑迁移
+            if last == start - 1:
+                print(f"无 checkpoint c{last}，自动 seal 当前 stores …")
+                _seal_checkpoint_from_stores(last)
+            else:
+                raise SystemExit(
+                    f"接续需要 checkpoint c{start - 1}（stores 最大章=c{last}）。\n"
+                    f"可：rollback --to N 或 checkpoint --seal {last}"
+                )
+        if start > chapters:
+            print(f"已到 c{last}，--chapters {chapters} 无需再跑。")
+            return
+
+    if start > chapters:
+        raise SystemExit(f"--from {start} 已超过 --chapters {chapters}")
+
+    print(f"接续：从 c{start} 跑到 c{chapters}（不重种 stores）")
+    _run_chapter_range(start=start, chapters=chapters, no_writer=no_writer)
+
+
 def cmd_auto(*, chapters: int, no_writer: bool, genesis: bool) -> None:
-    """连跑 N 章。产物：data/walk/chapters/c{n}/{context,out}/"""
-    global _PROMPT_CTX_DIR, _PROMPT_SEQ, _ACTIVE_STEP
+    """干净连跑 1…N：重种 G5 后开跑；产物在 chapters/c{n}/，章末写 checkpoint。"""
     if chapters < 1:
         raise SystemExit("--chapters 至少为 1")
     _ensure_genesis(do_genesis=genesis)
     _reseed_stores_from_g5()
+    _purge_chapters_after(0)
+    _run_chapter_range(start=1, chapters=chapters, no_writer=no_writer)
+
+
+def _run_chapter_range(*, start: int, chapters: int, no_writer: bool) -> None:
+    """跑 start…chapters（含）。假定 stores 已就位。"""
+    global _PROMPT_CTX_DIR, _PROMPT_SEQ, _ACTIVE_STEP
 
     l0 = _load_out("g1", "l0.json", L0)
     l1 = _load_out("g1", "l1.json", L1)
@@ -812,26 +1029,34 @@ def cmd_auto(*, chapters: int, no_writer: bool, genesis: bool) -> None:
 
     script_store, ms_store = _script_ms_stores()
     mem_store, arc_store = _mem_arc_stores()
+    from story_engine.schemas.stores.violation import Violation
+
+    vio_path = STORES_DIR / "violation.jsonl"
+    vio_store: JsonStore[Violation] = JsonStore(Violation, vio_path, key_field="id")
     stores = {
         "script": script_store,
         "mem": mem_store,
         "arc": arc_store,
         "manuscript": ms_store,
+        "violation": vio_store,
     }
 
-    for n in range(1, chapters + 1):
+    for n in range(start, chapters + 1):
         dump = _chapter_dump_dir(n)
         ctx_dir = dump / "context"
         if ctx_dir.exists():
             shutil.rmtree(ctx_dir)
         ctx_dir.mkdir(parents=True, exist_ok=True)
-        (dump / "out").mkdir(parents=True, exist_ok=True)
+        out = dump / "out"
+        if out.exists():
+            shutil.rmtree(out)
+        out.mkdir(parents=True, exist_ok=True)
         _PROMPT_CTX_DIR = ctx_dir
         _PROMPT_SEQ = 0
         _ACTIVE_STEP = None
 
         ctx, tel = _ctx()
-        print(f"\n══ auto 第 {n}/{chapters} 章（skip_writer={no_writer}）══")
+        print(f"\n══ 第 {n}/{chapters} 章（skip_writer={no_writer}）══")
         result = run_chapter(
             ctx,
             n,
@@ -842,7 +1067,6 @@ def cmd_auto(*, chapters: int, no_writer: bool, genesis: bool) -> None:
             stores=stores,
             skip_writer=no_writer,
         )
-        out = dump / "out"
         _dump_model(out / "plan.json", result.plan)
         _dump_model(out / "scene_script.json", result.scene_script)
         _dump_model(out / "script.json", result.script)
@@ -851,12 +1075,24 @@ def cmd_auto(*, chapters: int, no_writer: bool, genesis: bool) -> None:
         _dump_json(out / "rejected.json", result.rejected)
         _dump_json(out / "coerced.json", result.coerced)
         _dump_json(out / "trace.json", result.trace)
+        _dump_json(
+            out / "violations.json",
+            [v.model_dump(mode="json", exclude_none=True) for v in result.violations],
+        )
+        if result.blocked:
+            print(f"⚠ {result.chapter} 挂起（未入库）——不写 checkpoint，中止后续章")
+            print("trace:", " | ".join(result.trace))
+            print("telemetry:", tel.summary())
+            break
+        print(f"consistency_status={result.consistency_status}")
+        _save_checkpoint(n, consistency_status=result.consistency_status)
         print("trace:", " | ".join(result.trace))
         print("telemetry:", tel.summary())
         print(f"产物：{dump}/out/")
 
     _PROMPT_CTX_DIR = None
-    print(f"\n完成 {chapters} 章。目录：{CHAPTERS_DIR.resolve()}")
+    print(f"\n完成。章节目录：{CHAPTERS_DIR.resolve()}")
+    print(f"检查点：{CHECKPOINTS_DIR.resolve()}")
     print("共享库：", STORES_DIR.resolve())
 
 
@@ -882,7 +1118,7 @@ def main(argv: list[str] | None = None) -> None:
     p_run.add_argument("step", choices=list(HANDLERS))
     p_show = sub.add_parser("show", help="回看某步 context/out")
     p_show.add_argument("name", help="g1 | g1.context | g1.out | plan.context …")
-    p_auto = sub.add_parser("auto", help="创世齐备后连跑 N 章（默认跳过 Writer）")
+    p_auto = sub.add_parser("auto", help="干净重跑 1…N（重种 stores；默认跳过 Writer）")
     p_auto.add_argument("--chapters", type=int, default=3, help="章数（默认 3）")
     p_auto.add_argument(
         "--with-writer",
@@ -893,6 +1129,34 @@ def main(argv: list[str] | None = None) -> None:
         "--genesis",
         action="store_true",
         help="创世未齐时自动补跑 g0–g5",
+    )
+    p_roll = sub.add_parser("rollback", help="回到第 N 章末（--to 0 = G5）")
+    p_roll.add_argument("--to", type=int, required=True, help="目标章号；0=G5")
+    p_roll.add_argument(
+        "--keep-dumps",
+        action="store_true",
+        help="只还原 stores，不删 chapters/checkpoints",
+    )
+    p_cont = sub.add_parser("continue", help="接续重跑（不重种；--from K 先回滚到 K-1）")
+    p_cont.add_argument("--chapters", type=int, required=True, help="跑到第几章（含）")
+    p_cont.add_argument(
+        "--from",
+        dest="from_chapter",
+        type=int,
+        default=None,
+        help="从第 K 章重来（隐含 rollback --to K-1）",
+    )
+    p_cont.add_argument(
+        "--with-writer",
+        action="store_true",
+        help="渲染散文（默认跳过 Writer）",
+    )
+    p_cp = sub.add_parser("checkpoint", help="查看/封存检查点")
+    p_cp.add_argument(
+        "--seal",
+        type=int,
+        default=None,
+        help="把当前 stores 封成 cN（须恰好停在第 N 章末）",
     )
     sub.add_parser("reset", help="清空 data/walk")
 
@@ -909,6 +1173,16 @@ def main(argv: list[str] | None = None) -> None:
             no_writer=not args.with_writer,
             genesis=args.genesis,
         )
+    elif args.cmd == "rollback":
+        cmd_rollback(to=args.to, keep_dumps=args.keep_dumps)
+    elif args.cmd == "continue":
+        cmd_continue(
+            chapters=args.chapters,
+            no_writer=not args.with_writer,
+            from_chapter=args.from_chapter,
+        )
+    elif args.cmd == "checkpoint":
+        cmd_checkpoint(seal=args.seal)
     elif args.cmd == "reset":
         cmd_reset()
 

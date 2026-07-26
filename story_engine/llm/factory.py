@@ -12,6 +12,8 @@ def build_llm_client(
     settings: Settings | None = None,
     telemetry: Telemetry | None = None,
 ) -> LLMClient:
+    from story_engine.llm.node_profiles import NodeProfileResolver
+
     s = settings or load_settings()
     provider: LLMProvider
     if s.llm_provider == "mock":
@@ -27,9 +29,15 @@ def build_llm_client(
         )
     else:
         raise ValueError(f"未知 llm_provider: {s.llm_provider}（可选 mock | openai）")
+    resolver = NodeProfileResolver(
+        default_model=s.llm_model,
+        model_overrides=dict(s.llm_node_models or {}),
+        thinking_overrides=dict(s.llm_node_thinking or {}),  # type: ignore[arg-type]
+    )
     return LLMClient(
         provider,
         telemetry=telemetry,
         max_retries=s.llm_max_retries,
         node_models=s.llm_node_models,
+        profile_resolver=resolver,
     )

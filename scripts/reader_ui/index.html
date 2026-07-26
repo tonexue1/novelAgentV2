@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Story Reader</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <aside class="rail" id="rail">
+    <header class="rail-head">
+      <p class="brand">Story Reader</p>
+      <p class="logline" id="logline">加载中…</p>
+    </header>
+    <nav class="nav">
+      <button type="button" class="nav-btn active" data-view="read" id="nav-read">章节</button>
+      <button type="button" class="nav-btn" data-view="genesis" id="nav-genesis">创世</button>
+    </nav>
+    <ol class="chapters" id="chapters"></ol>
+    <footer class="rail-foot" id="rail-foot"></footer>
+  </aside>
+
+  <main class="main">
+    <section class="view" id="view-read" hidden>
+      <div class="read-layout">
+        <article class="script" id="script">
+          <p class="empty">左侧选一章</p>
+        </article>
+        <aside class="side" id="side">
+          <details open>
+            <summary>本章计划</summary>
+            <div id="side-plan" class="side-body"></div>
+          </details>
+          <details open>
+            <summary>闸门违规</summary>
+            <div id="side-vios" class="side-body"></div>
+          </details>
+          <details>
+            <summary>Trace</summary>
+            <div id="side-trace" class="side-body"></div>
+          </details>
+        </aside>
+      </div>
+    </section>
+
+    <section class="view" id="view-genesis" hidden>
+      <article class="genesis" id="genesis">
+        <p class="empty">加载创世…</p>
+      </article>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -7,7 +7,9 @@
 DeepSeek 适配点：
   - json_object 模式要求 prompt 含 "json" 字样——instructor 注入的 schema 系统消息天然满足；
   - 输出被 max_tokens 截断（finish_reason=length）时给出明确报错，不与解析失败混淆；
-  - 偶发空 content 落入 instructor 重试路径。
+  - 偶发空 content 落入 instructor 重试路径；
+  - V4 thinking：`thinking=enabled|disabled` → `extra_body={"thinking":{"type":...}}`
+    （由 node_profiles 按节点注入；默认档见 `python -m story_engine.llm`）。
 
 留痕注意：instructor 内部重试的中间尝试不产生独立 RunRecord，
 最终返回的 usage 只反映最后一次成功调用（M2 接受，M5 评估期如需精确记账再改）。
@@ -101,10 +103,16 @@ class OpenAIProvider:
 
     # ── 内部 ──────────────────────────────────────────────────────
     def _params(self, cfg: dict[str, object]) -> dict[str, object]:
+        """组装 chat.completions 参数；thinking 走 DeepSeek extra_body。"""
         params = dict(cfg)
         params.setdefault("model", self.model)
         if self._temperature is not None:
             params.setdefault("temperature", self._temperature)
+        thinking = params.pop("thinking", None)
+        if thinking in {"enabled", "disabled"}:
+            extra = dict(params.get("extra_body") or {})  # type: ignore[arg-type]
+            extra["thinking"] = {"type": thinking}
+            params["extra_body"] = extra
         return params
 
     @staticmethod

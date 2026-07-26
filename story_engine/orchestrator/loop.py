@@ -1,11 +1,15 @@
 """单章递推循环 —— 对应受控递推 xᵢ=f(R(Sᵢ₋₁)); Sᵢ=U(Sᵢ₋₁,xᵢ)。
 
-M2 垂直切片，一章的全程：
-  Planner → Director·setup → (dispatch ⇄ Character)* → ChapterScript
-    → Applier 定序落库 → Writer 渲染散文
+M3 垂直切片，一章的全程：
+  Planner → Director·setup → (dispatch ⇄ Character → 逐拍硬检)* → 场收束
+    → [一致性闸: 场级硬检 + Continuity Critic] → 过闸才拼进 staged 章
+    → 章末一次性落库（clean | flagged）→ Writer 渲染散文
     → Extractor → Faithfulness → Reconciler → Applier 应用增量
 
-尚未接（M3）：一致性闸全链、Continuity Critic、升级阶梯、真检索装配。
+守门纪律：**没过闸的内容不许进 ScriptStore**。本章生成期间内容都在 StagedScriptView 里，
+BLOCK 爬满阶梯则该章完全不入库（挂起），Recorder 不跑。
+
+尚未接（M4）：Replanner 卷复盘（阶梯第四级）、向量检索、WorldOp 落库。
 本文件只负责编排与工作缓冲，所有语义判断都在节点里。
 """
 
@@ -21,13 +25,19 @@ from story_engine.nodes.production.director import DirectorDispatch, DirectorSet
 from story_engine.nodes.recorder.extractor import Extractor
 from story_engine.nodes.recorder.reconciler import Reconciler
 from story_engine.nodes.system.applier import Applier
+from story_engine.nodes.system.assembler import Assembler
+from story_engine.nodes.system.consistency_gate import ConsistencyGate, GateDecision
+from story_engine.nodes.system.violation_log import ViolationTracker
+from story_engine.nodes.validation.continuity_critic import ContinuityCritic
 from story_engine.nodes.validation.faithfulness_check import FaithfulnessCheck
+from story_engine.orchestrator.staged import StagedScriptView
 from story_engine.primitives.ids import mint_chapter
 from story_engine.schemas.artifacts.chapter_plan import ChapterPlan
-from story_engine.schemas.artifacts.scene_script import SceneScript
+from story_engine.schemas.artifacts.scene_script import BeatDispatch, SceneScript
 from story_engine.schemas.stores.manuscript import Manuscript
 from story_engine.schemas.stores.plan import L0, L1, L2
-from story_engine.schemas.stores.script import Beat, ChapterScript, Scene, SceneCast
+from story_engine.schemas.stores.script import ChapterScript, Scene, SceneCast
+from story_engine.schemas.stores.violation import Violation
 from story_engine.schemas.stores.world import WorldEntity
 
 # 单场最多拍数的兜底（合同没给 budget 时用），防 dispatch 不收场
@@ -41,6 +51,9 @@ class ChapterResult:
     scene_script: SceneScript | None = None
     script: ChapterScript | None = None
     manuscript: Manuscript | None = None
+    consistency_status: str | None = None                   # clean | flagged；挂起为 None
+    blocked: bool = False                                   # 爬满阶梯仍不过，该章未入库
+    violations: list[Violation] = field(default_factory=list)
     rejected: list[dict] = field(default_factory=list)      # 忠实性校验拒掉的候选
     coerced: list[dict] = field(default_factory=list)       # 对账被系统降级的 op
     trace: list[str] = field(default_factory=list)
@@ -58,7 +71,7 @@ def run_chapter(
     style: str | None = None,
     skip_writer: bool = False,
 ) -> ChapterResult:
-    """跑完第 n 章。stores 需含 script / mem / arc；manuscript 可选。
+    """跑完第 n 章。stores 需含 script / mem / arc；manuscript / violation 可选。
 
     skip_writer=True 时跳过散文渲染（走查/批跑常用；Recorder 只吃 Script）。
     """
@@ -71,66 +84,66 @@ def run_chapter(
     mem_store = stores["mem"]
     arc_store = stores["arc"]
     manuscript_store = stores.get("manuscript")
+    world_ids = {w.entity_id for w in world} if world else None
+
+    gate = ConsistencyGate(ViolationTracker(stores.get("violation")))
+    assembler, critic = Assembler(), ContinuityCritic()
     applier = Applier()
 
-    # ── 1. 规划：L2 → L3 ────────────────────────────────────────
-    plan = Planner().plan(
-        ctx,
-        chapter=n,
-        l0=l0,
-        l1=l1,
-        l2=l2,
-        arcs=arc_store.all(),
-        due_foreshadows=_due_foreshadows(arc_store, n),
-        recent_summaries=_recent_tails(script_store, n),
-    )
-    trace.append(f"{chapter_id}: plan ({len(plan.story_beats)} 桥段)")
+    plan: ChapterPlan | None = None
+    scene_script: SceneScript | None = None
+    staged: StagedScriptView | None = None
+    replan_report = ""
 
-    # ── 2. 拆场：L3 → 场景合同 ──────────────────────────────────
-    scene_script = DirectorSetup().split_scenes(ctx, chapter=n, plan=plan, world=world)
-    trace.append(f"{chapter_id}: setup ({len(scene_script.scenes)} 场)")
+    # ── 1~3. 规划 → 拆场 → 逐场过闸（BLOCK 可整章重来一次）──────
+    while True:
+        plan = Planner().plan(
+            ctx,
+            chapter=n,
+            l0=l0,
+            l1=l1,
+            l2=l2,
+            arcs=arc_store.all(),
+            due_foreshadows=_due_foreshadows(arc_store, n),
+            recent_summaries=_recent_tails(script_store, n),
+            retrieved=assembler.assemble(
+                node="planner", chapter=n, mem_store=mem_store, arc_store=arc_store,
+                focus=_plan_focus(l2, n),
+            ).facts(),
+            violations=replan_report or None,
+        )
+        trace.append(f"{chapter_id}: plan ({len(plan.story_beats)} 桥段)")
 
-    # ── 3. 逐场：dispatch ⇄ Character 涌现 beats ─────────────────
-    dispatcher, actor = DirectorDispatch(), Character()
-    scenes: list[Scene] = []
-    for contract in scene_script.scenes:
-        buffer: list[Beat] = []
-        limit = contract.budget.max_beats or _DEFAULT_MAX_BEATS
-        while len(buffer) < limit:
-            dispatch = dispatcher.next_beat(
-                ctx, chapter=n, contract=contract, done_beats=buffer
+        scene_script = DirectorSetup().split_scenes(
+            ctx, chapter=n, plan=plan, world=world, violations=replan_report or None
+        )
+        trace.append(f"{chapter_id}: setup ({len(scene_script.scenes)} 场)")
+
+        staged = StagedScriptView(script_store, _skeleton(chapter_id, plan))
+        verdict = _run_scenes(
+            ctx, n,
+            plan=plan, scene_script=scene_script, staged=staged, gate=gate,
+            assembler=assembler, critic=critic, world=world, world_ids=world_ids,
+            mem_store=mem_store, arc_store=arc_store, script_store=script_store,
+            trace=trace,
+        )
+        if verdict.action == "replan_chapter":
+            replan_report = verdict.report
+            trace.append(f"{chapter_id}: BLOCK 升级 → 整章重规划")
+            continue
+        if verdict.action == "block":
+            gate.abort_chapter()
+            trace.append(f"{chapter_id}: 爬满阶梯仍未过闸 → 挂起，本章不入库")
+            return ChapterResult(
+                chapter=chapter_id, plan=plan, scene_script=scene_script,
+                blocked=True, violations=gate.tracker.settled, trace=trace,
             )
-            if dispatch is None:
-                break
-            buffer.append(
-                actor.act(
-                    ctx,
-                    chapter=n,
-                    dispatch=dispatch,
-                    contract=contract,
-                    known_facts=_known_facts(mem_store, dispatch.owner, n),
-                    buffer=buffer,
-                )
-            )
-        scenes.append(_to_scene(contract, buffer))
-        trace.append(f"{chapter_id}: {contract.scene_id} 收场（{len(buffer)} 拍）")
+        break
 
-    # ── 4. 落库主真相 ────────────────────────────────────────────
-    # 一致性闸要 M3 才接。在那之前本章并未过闸，只能标 flagged（"是真相，
-    # 但可能有轻微问题"）——标成 clean 等于给没安检的货盖合格章。
-    script = ChapterScript(
-        chapter=chapter_id,
-        volume=plan.derived_from.l2_vol_id,
-        theme=plan.theme,
-        tone=plan.tone,
-        covered_threads=[t.thread_id for t in plan.thread_advances],
-        consistency_status="flagged",
-        derived_from=plan.chapter,
-        scenes=scenes,
-    )
-    applier.assign_beat_ids(script)
-    script_store.append(script)
-    trace.append(f"{chapter_id}: script 落库")
+    # ── 4. 过闸后落库主真相 ──────────────────────────────────────
+    status = gate.close_chapter()
+    script = staged.commit(consistency_status=status)
+    trace.append(f"{chapter_id}: 过闸落库（{status}）")
 
     # ── 5. 消费层渲染（读 Script，不回写真相层）─────────────────
     manuscript: Manuscript | None = None
@@ -171,16 +184,199 @@ def run_chapter(
         scene_script=scene_script,
         script=script,
         manuscript=manuscript,
+        consistency_status=status,
+        violations=gate.tracker.settled,
         rejected=verified.rejected,
         coerced=reconciled.coerced,
         trace=trace,
     )
 
 
-# ── 上下文装配（M2 糙版；M3 换成 Retriever + Assembler 按节点画像）──
+# ── 逐场：dispatch ⇄ Character → 逐拍硬检 → 场收束过闸 ────────
 
 
-def _to_scene(contract, beats: list[Beat]) -> Scene:
+def _run_scenes(
+    ctx: NodeContext,
+    n: int,
+    *,
+    plan: ChapterPlan,
+    scene_script: SceneScript,
+    staged: StagedScriptView,
+    gate: ConsistencyGate,
+    assembler: Assembler,
+    critic: ContinuityCritic,
+    world,
+    world_ids,
+    mem_store,
+    arc_store,
+    script_store,
+    trace: list[str],
+) -> GateDecision:
+    """跑完本章所有场。返回 admit（全过）或需要整章升级的决策。"""
+    chapter_id = mint_chapter(n)
+    for index, _ in enumerate(scene_script.scenes):
+        report = ""
+        while True:
+            contract = scene_script.scenes[index]
+            gate.reset_scene(contract.scene_id)
+            staged.open_scene(_scene_shell(contract))
+            decision = _run_scene(
+                ctx, n,
+                contract=contract, staged=staged, gate=gate, assembler=assembler,
+                critic=critic, world_ids=world_ids, mem_store=mem_store,
+                arc_store=arc_store, script_store=script_store, report=report,
+            )
+            if decision.admitted:
+                staged.admit_scene()
+                flag = "（flagged）" if decision.flagged else ""
+                trace.append(
+                    f"{chapter_id}: {contract.scene_id} 过闸{flag}"
+                    f"（{len(staged.admitted_scenes[-1].beats)} 拍）"
+                )
+                break
+
+            staged.discard_draft()
+            report = decision.report
+            if decision.action == "retry_scene":
+                trace.append(f"{chapter_id}: {contract.scene_id} 同场重试")
+                continue
+            if decision.action == "redirect_scene":
+                trace.append(f"{chapter_id}: {contract.scene_id} 场重导")
+                scene_script.scenes[index] = DirectorSetup().redirect(
+                    ctx, chapter=n, plan=plan, contract=contract,
+                    violations=report, world=world,
+                )
+                continue
+            return decision  # replan_chapter / block：交回章级
+    return GateDecision("admit")
+
+
+def _run_scene(
+    ctx: NodeContext,
+    n: int,
+    *,
+    contract,
+    staged: StagedScriptView,
+    gate: ConsistencyGate,
+    assembler: Assembler,
+    critic: ContinuityCritic,
+    world_ids,
+    mem_store,
+    arc_store,
+    script_store,
+    report: str,
+) -> GateDecision:
+    """演完一场（逐拍即时硬检），再整场过闸。"""
+    dispatcher = DirectorDispatch()
+    limit = contract.budget.max_beats or _DEFAULT_MAX_BEATS
+
+    while len(staged.draft_scene.beats) < limit:
+        dispatch = dispatcher.next_beat(
+            ctx, chapter=n, contract=contract, done_beats=staged.draft_scene.beats
+        )
+        if dispatch is None:
+            break
+        decision = _run_beat(
+            ctx, n,
+            dispatch=dispatch, contract=contract, staged=staged, gate=gate,
+            assembler=assembler, world_ids=world_ids, mem_store=mem_store,
+            arc_store=arc_store, scene_report=report,
+        )
+        if not decision.admitted:
+            return decision  # 拍级升级：整场重来/重导
+
+    return gate.scene_gate(
+        ctx,
+        scene=staged.draft_scene,
+        contract=contract,
+        chapter=n,
+        arc_store=arc_store,
+        world_ids=world_ids,
+        previous_scenes=staged.admitted_scenes,
+        critic=critic,
+        context=assembler.assemble(
+            node="continuity-critic", chapter=n, mem_store=mem_store,
+            arc_store=arc_store, focus=contract.goal,
+            cast=[c.char for c in contract.cast],
+        ),
+        recent_summaries=_recent_tails(script_store, n),
+    )
+
+
+def _run_beat(
+    ctx: NodeContext,
+    n: int,
+    *,
+    dispatch: BeatDispatch,
+    contract,
+    staged: StagedScriptView,
+    gate: ConsistencyGate,
+    assembler: Assembler,
+    world_ids,
+    mem_store,
+    arc_store,
+    scene_report: str,
+) -> GateDecision:
+    """演一拍 + 逐拍即时硬检。违规先只重调这一拍。"""
+    known_facts = assembler.known_facts(
+        char=dispatch.owner, chapter=n, mem_store=mem_store,
+        arc_store=arc_store, focus=dispatch.dramatic_goal,
+    )
+    report = scene_report
+    while True:
+        beat = staged.stage_beat(
+            Character().act(
+                ctx,
+                chapter=n,
+                dispatch=_with_report(dispatch, report),
+                contract=contract,
+                known_facts=known_facts,
+                buffer=staged.draft_scene.beats,
+            )
+        )
+        decision = gate.beat_gate(
+            beat=beat, contract=contract, chapter=n,
+            arc_store=arc_store, world_ids=world_ids, mem_store=mem_store,
+        )
+        if decision.admitted:
+            return decision
+        staged.drop_last_beat()
+        if decision.action != "retry_beat":
+            return decision
+        report = decision.report
+
+
+def _with_report(dispatch: BeatDispatch, report: str) -> BeatDispatch:
+    if not report:
+        return dispatch
+    directive = (dispatch.directive or "").strip()
+    note = f"【上一版这一拍被一致性闸拦下，必须改掉】\n{report}"
+    return dispatch.model_copy(update={"directive": f"{directive}\n{note}".strip()})
+
+
+# ── 装配与派生（检索交 Assembler，这里只留纯结构性的取数）──────
+
+
+def _skeleton(chapter_id: str, plan: ChapterPlan) -> ChapterScript:
+    """章头。scenes 逐场过闸后才填，consistency_status 章末才定。"""
+    return ChapterScript(
+        chapter=chapter_id,
+        volume=plan.derived_from.l2_vol_id,
+        theme=plan.theme,
+        tone=plan.tone,
+        covered_threads=[t.thread_id for t in plan.thread_advances],
+        derived_from=plan.chapter,
+        scenes=[],
+    )
+
+
+def _scene_shell(contract) -> Scene:
+    """空场壳：场头来自合同，拍由 Character 逐个填进 staged 缓冲。"""
+    return _to_scene(contract, [])
+
+
+def _to_scene(contract, beats) -> Scene:
+    """合同 + 拍列表 → Scene（walk 分步脚本与 staged 共用）。"""
     return Scene(
         scene_id=contract.scene_id,
         location=contract.location,
@@ -190,8 +386,17 @@ def _to_scene(contract, beats: list[Beat]) -> Scene:
         contract_ref=contract.scene_id,
         time=contract.time,
         cast=[SceneCast(char=c.char, entry_state=c.entry_state) for c in contract.cast],
-        beats=beats,
+        beats=list(beats),
     )
+
+
+def _plan_focus(l2: L2 | None, chapter: int) -> str:
+    if l2 is None:
+        return ""
+    for b in l2.chapter_beats:
+        if b.planned_seq == chapter:
+            return b.event
+    return l2.goal or ""
 
 
 def _due_foreshadows(arc_store, chapter: int) -> list[str]:
@@ -229,14 +434,6 @@ def _previous_tail(manuscript_store, chapter: int) -> str | None:
     return prev.text if prev else None
 
 
-def _known_facts(mem_store, owner: str, chapter: int, k: int = 12) -> list[str]:
-    """该角色 as-of 已知的事——认知边界的粗版实现。"""
-    if owner in {"ENV", "NARRATION"}:
-        return []
-    items = [m for m in mem_store.as_of(chapter) if m.scope == owner]
-    return [m.text for m in items[-k:]]
-
-
 def _brief_memories(mem_store, chapter: int, k: int = 20) -> list[dict]:
     return [
         {"id": m.id, "type": m.type, "scope": m.scope, "text": m.text}
@@ -245,5 +442,5 @@ def _brief_memories(mem_store, chapter: int, k: int = 20) -> list[dict]:
 
 
 def _related_memories(mem_store, chapter: int, k: int = 30) -> list:
-    """对账的候选池。M3 换成按 scope/语义检索，M2 先给 as-of 全量尾部。"""
+    """对账的候选池。M4 换成按 scope/语义检索，先给 as-of 全量尾部。"""
     return mem_store.as_of(chapter)[-k:]

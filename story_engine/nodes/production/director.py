@@ -36,6 +36,16 @@ _SETUP_TASK = """把 ChapterPlan 拆成 2~4 个场景，每场出一份合同。
 - cast 里的 char 用 char.{slug}，entry_state 写此人进场时的处境/情绪。
 - budget.max_beats 给 6~12，防止场景跑不完。"""
 
+_REDIRECT_ROLE = "你是导演，负责**重导**一场被一致性闸拦下的戏。"
+_REDIRECT_TASK = """这一场没过闸。看违规报告，重出**这一场**的合同（只出一场）。
+
+硬要求：
+- 违规报告里点名的问题必须在新合同里被结构性地消掉（改地点/改在场/去掉不该收的伏笔/调 POV），
+  不是换个说法糊过去。
+- scene_id 保持不变；obligation_id 形如 {scene_id}.o1、.o2，按顺序编号。
+- 仍然**定锚不定序**：obligation.desc 写戏剧目标，禁台词。
+- 能保的尽量保：没被点名的锚、cast、退出条件不要乱改。"""
+
 _DISPATCH_ROLE = "你是现场调度，站在片场决定**下一拍谁来演、演什么目标**。"
 _DISPATCH_TASK = """看本场合同和已经拍完的实录，决定下一步。
 
@@ -61,6 +71,7 @@ class DirectorSetup:
         plan: ChapterPlan,
         world: list[WorldEntity] | None = None,
         profiles: list[dict] | None = None,
+        violations: str | None = None,
     ) -> SceneScript:
         if ctx.llm is None:
             raise ValueError("DirectorSetup 需要 LLMClient")
@@ -71,11 +82,52 @@ class DirectorSetup:
                 ("本章计划 ChapterPlan", as_json(plan)),
                 ("可用 canon（地点/概念/势力，优先复用）", as_json(world or [], limit=2000)),
                 ("出场人物粗画像", as_json(profiles or [], limit=1500)),
+                ("上一版的闸门违规（必须避开）", violations or ""),
                 ("本章章号", f"第 {chapter} 章"),
             ],
         )
         script = ctx.llm.complete_structured(prompt, SceneScript, node=self.name, chapter=chapter)
         return self._anchor(script, chapter=chapter, plan=plan)
+
+    def redirect(
+        self,
+        ctx: NodeContext,
+        *,
+        chapter: int,
+        plan: ChapterPlan,
+        contract: SceneContract,
+        violations: str,
+        world: list[WorldEntity] | None = None,
+    ) -> SceneContract:
+        """场重导：一致性闸阶梯第二级，只重出这一场的合同。"""
+        if ctx.llm is None:
+            raise ValueError("DirectorSetup 需要 LLMClient")
+        prompt = build_prompt(
+            _REDIRECT_ROLE,
+            _REDIRECT_TASK,
+            [
+                ("被拦下的场景合同", as_json(contract)),
+                ("闸门违规报告", violations),
+                ("本章计划 ChapterPlan", as_json(plan, limit=2000)),
+                ("可用 canon（地点/概念/势力，优先复用）", as_json(world or [], limit=2000)),
+            ],
+        )
+        fresh = ctx.llm.complete_structured(
+            prompt, SceneContract, node=f"{self.name}_redirect", chapter=chapter
+        )
+        return self._anchor_contract(fresh, scene_id=contract.scene_id)
+
+    @staticmethod
+    def _anchor_contract(contract: SceneContract, *, scene_id: str) -> SceneContract:
+        """位置 id 是系统事实：场号锁死原值，承重拍重新连号。"""
+        contract.scene_id = scene_id
+        remap = {}
+        for k, ob in enumerate(contract.obligations, start=1):
+            remap[ob.obligation_id] = f"{scene_id}.o{k}"
+            ob.obligation_id = remap[ob.obligation_id]
+        for ob in contract.obligations:
+            ob.precede = [remap[p] for p in ob.precede if p in remap]
+        return contract
 
     def _anchor(self, script: SceneScript, *, chapter: int, plan: ChapterPlan) -> SceneScript:
         """场景/承重拍 id 由系统重铸，保证位置 id 严格连号可寻址。"""
