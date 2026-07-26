@@ -25,13 +25,12 @@
 
 ## 状态
 
-**M0 ✅ + M1 ✅ + M2 ✅ 已落地**（见 [docs/ROADMAP.md](docs/ROADMAP.md)）：
+**M0–M3 ✅ 已落地**（见 [docs/ROADMAP.md](docs/ROADMAP.md)）：
 原语 / schema / JSON Store / telemetry / Genesis Gate / Applier / Hard-Check /
-Retriever（BM25）/ Chunker / Temporal；LLM（DeepSeek + instructor）；
-创世 → Planner → Director → Character → Script → Writer → Extractor →
-Faithfulness → Reconciler → Applier。走查：`uv run python scripts/walk.py` /
-`auto --chapters N`（可跳过 Writer）。`pytest` 全绿。
-**下一步：M3 递推闭环**（真检索装配、一致性闸、升级阶梯）。
+Retriever（BM25）/ Chunker / Temporal；LLM（DeepSeek + instructor，节点分层）；
+创世 → 单章生产 → 对账；Assembler + Continuity Critic + Consistency Gate（过闸才入库）；
+walk 检查点 / `rollback` / `continue`。`pytest` 全绿。
+**下一步：M4 长程/规划**（Summarizer / 向量检索 / Replanner / WorldOp）。
 
 ## 开发
 
@@ -40,6 +39,18 @@ uv venv
 uv pip install -e ".[dev]"          # UT
 uv pip install -e ".[openai,dev]"   # 真 LLM（DeepSeek 等）
 uv run pytest                       # 全绿（默认 mock，不打网）
+```
+
+### 走查
+
+```bash
+uv run python scripts/walk.py status
+uv run python scripts/walk.py auto --chapters 5              # 干净连跑（默认跳过 Writer）
+uv run python scripts/walk.py continue --from 3 --chapters 8 # 从检查点接续（隐含 rollback）
+uv run python scripts/walk.py rollback --to 2
+uv run python scripts/walk.py auto --chapters 3 --no-critic  # 场收束只跑硬检
+uv run python -m story_engine.llm                            # 查节点模型配置
+uv run python scripts/reader.py                              # 本地读稿 http://127.0.0.1:8765
 ```
 
 ### 模型配置（走 env）
