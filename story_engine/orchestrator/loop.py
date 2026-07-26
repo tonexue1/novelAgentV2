@@ -70,10 +70,12 @@ def run_chapter(
     stores: dict | None = None,
     style: str | None = None,
     skip_writer: bool = False,
+    enable_critic: bool = True,
 ) -> ChapterResult:
     """跑完第 n 章。stores 需含 script / mem / arc；manuscript / violation 可选。
 
     skip_writer=True 时跳过散文渲染（走查/批跑常用；Recorder 只吃 Script）。
+    enable_critic=False 时场收束只跑硬检（走查加速；正品默认开）。
     """
     stores = stores or ctx.stores
     chapter_id = mint_chapter(n)
@@ -87,7 +89,8 @@ def run_chapter(
     world_ids = {w.entity_id for w in world} if world else None
 
     gate = ConsistencyGate(ViolationTracker(stores.get("violation")))
-    assembler, critic = Assembler(), ContinuityCritic()
+    assembler = Assembler()
+    critic: ContinuityCritic | None = ContinuityCritic() if enable_critic else None
     applier = Applier()
 
     plan: ChapterPlan | None = None
@@ -204,7 +207,7 @@ def _run_scenes(
     staged: StagedScriptView,
     gate: ConsistencyGate,
     assembler: Assembler,
-    critic: ContinuityCritic,
+    critic: ContinuityCritic | None,
     world,
     world_ids,
     mem_store,
@@ -259,7 +262,7 @@ def _run_scene(
     staged: StagedScriptView,
     gate: ConsistencyGate,
     assembler: Assembler,
-    critic: ContinuityCritic,
+    critic: ContinuityCritic | None,
     world_ids,
     mem_store,
     arc_store,
@@ -285,6 +288,13 @@ def _run_scene(
         if not decision.admitted:
             return decision  # 拍级升级：整场重来/重导
 
+    critic_ctx = None
+    if critic is not None:
+        critic_ctx = assembler.assemble(
+            node="continuity-critic", chapter=n, mem_store=mem_store,
+            arc_store=arc_store, focus=contract.goal,
+            cast=[c.char for c in contract.cast],
+        )
     return gate.scene_gate(
         ctx,
         scene=staged.draft_scene,
@@ -294,11 +304,7 @@ def _run_scene(
         world_ids=world_ids,
         previous_scenes=staged.admitted_scenes,
         critic=critic,
-        context=assembler.assemble(
-            node="continuity-critic", chapter=n, mem_store=mem_store,
-            arc_store=arc_store, focus=contract.goal,
-            cast=[c.char for c in contract.cast],
-        ),
+        context=critic_ctx,
         recent_summaries=_recent_tails(script_store, n),
     )
 

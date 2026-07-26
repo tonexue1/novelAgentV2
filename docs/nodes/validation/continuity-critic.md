@@ -1,7 +1,7 @@
 # Continuity Critic（续写评审，B）
 
 > **层**：validation ｜ **类型**：LLM ｜ **触发**：每场 Script 完成后一道
-> **提示词**：待定（本文先略）
+> **提示词**：已接（`story_engine/nodes/validation/continuity_critic.py`）
 
 ## 做什么
 
@@ -14,7 +14,17 @@
 
 ## 输出
 
-- 通过 / [violation-log](../../schema/stores/violation-log.md) Violation（check_type=llm；OOC/canon_contradiction/voice/logic；含 suggestion）。
+- 通过 / [violation-log](../../schema/stores/violation-log.md) Violation（check_type=llm；OOC/canon_contradiction/voice/logic；含 suggestion）。空列表 = 过。
+
+## 严重度钳制（代码焊死）
+
+模型常把「少铺垫 / 动机弱」标成 `BLOCK/logic`。入库前强制：
+
+- `logic` / `voice` / `OOC` / 未知 category：**禁止** BLOCK → 降为 CORRECT。
+- `canon_contradiction` 标 BLOCK 但 `refs` 为空 → 降为 CORRECT。
+- 仅 `canon_contradiction` + 非空 refs 可保留 BLOCK。
+
+走查可用 `walk.py --no-critic` 跳过本节点（场收束仍跑硬检）。
 
 ## 交互
 

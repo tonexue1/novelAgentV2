@@ -94,8 +94,9 @@ def test_chapter_one_end_to_end(tmp_path):
     assert obligations == {"c1.s1.o1", "c1.s1.o2"}
     assert {b.hits for b in scene.beats} <= obligations
 
-    # 一致性闸未接（M3）→ 本章并未过闸，不许标 clean
-    assert script.consistency_status == "flagged"
+    # 闸已接 + 假 Critic 空 findings → 硬检过则 clean
+    assert script.consistency_status == "clean"
+    assert res.consistency_status == "clean"
 
     # 消费层出散文
     assert stores["manuscript"].get("c1").text

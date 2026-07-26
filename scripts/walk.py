@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -824,6 +825,26 @@ def _chapter_dump_dir(n: int) -> Path:
     return d
 
 
+def _has_complete_chapter_dump(n: int) -> bool:
+    """章产物齐全：out/script.json 在才算完整（防半章脏状态被 auto-seal）。"""
+    return (CHAPTERS_DIR / mint_chapter(n) / "out" / "script.json").is_file()
+
+
+def _recovery_hint(*, failed_chapter: int) -> str:
+    last_cp = _latest_checkpoint()
+    if last_cp is not None:
+        return (
+            f"恢复：uv run python scripts/walk.py rollback --to {last_cp}\n"
+            f"然后：uv run python scripts/walk.py continue --from {last_cp + 1} "
+            f"--chapters …"
+        )
+    return (
+        f"无检查点可回。stores 可能已半写入 c{failed_chapter}。\n"
+        f"干净重来：uv run python scripts/walk.py rollback --to 0\n"
+        f"或：uv run python scripts/walk.py auto --chapters …"
+    )
+
+
 # ── 检查点 / 回滚 / 接续 ───────────────────────────────────────
 
 
@@ -972,6 +993,7 @@ def cmd_continue(
     chapters: int,
     no_writer: bool,
     from_chapter: int | None,
+    no_critic: bool = False,
 ) -> None:
     """接续重跑。--from K 隐含 rollback 到 K-1 再跑 K…chapters。"""
     if chapters < 1:
@@ -988,8 +1010,14 @@ def cmd_continue(
         last = _latest_script_chapter() or 0
         start = last + 1
         if start > 1 and not (_checkpoint_dir(start - 1) / "meta.json").exists():
-            # stores 已在 start-1 末且无检查点 → 自动 seal，便于旧跑迁移
+            # stores 已在 start-1 末且无检查点 → 仅完整章可 auto-seal
             if last == start - 1:
+                if not _has_complete_chapter_dump(last):
+                    raise SystemExit(
+                        f"stores 有 c{last} 但 chapters/c{last}/out/script.json 缺失"
+                        f"（半章脏状态），拒绝 auto-seal。\n"
+                        + _recovery_hint(failed_chapter=last)
+                    )
                 print(f"无 checkpoint c{last}，自动 seal 当前 stores …")
                 _seal_checkpoint_from_stores(last)
             else:
@@ -1004,22 +1032,33 @@ def cmd_continue(
     if start > chapters:
         raise SystemExit(f"--from {start} 已超过 --chapters {chapters}")
 
-    print(f"接续：从 c{start} 跑到 c{chapters}（不重种 stores）")
-    _run_chapter_range(start=start, chapters=chapters, no_writer=no_writer)
+    print(
+        f"接续：从 c{start} 跑到 c{chapters}"
+        f"（不重种 stores；critic={'off' if no_critic else 'on'}）"
+    )
+    _run_chapter_range(
+        start=start, chapters=chapters, no_writer=no_writer, no_critic=no_critic
+    )
 
 
-def cmd_auto(*, chapters: int, no_writer: bool, genesis: bool) -> None:
+def cmd_auto(
+    *, chapters: int, no_writer: bool, genesis: bool, no_critic: bool = False
+) -> None:
     """干净连跑 1…N：重种 G5 后开跑；产物在 chapters/c{n}/，章末写 checkpoint。"""
     if chapters < 1:
         raise SystemExit("--chapters 至少为 1")
     _ensure_genesis(do_genesis=genesis)
     _reseed_stores_from_g5()
     _purge_chapters_after(0)
-    _run_chapter_range(start=1, chapters=chapters, no_writer=no_writer)
+    _run_chapter_range(
+        start=1, chapters=chapters, no_writer=no_writer, no_critic=no_critic
+    )
 
 
-def _run_chapter_range(*, start: int, chapters: int, no_writer: bool) -> None:
-    """跑 start…chapters（含）。假定 stores 已就位。"""
+def _run_chapter_range(
+    *, start: int, chapters: int, no_writer: bool, no_critic: bool = False
+) -> None:
+    """跑 start…chapters（含）。假定 stores 已就位。异常/挂起不跳章，退出非 0。"""
     global _PROMPT_CTX_DIR, _PROMPT_SEQ, _ACTIVE_STEP
 
     l0 = _load_out("g1", "l0.json", L0)
@@ -1041,6 +1080,7 @@ def _run_chapter_range(*, start: int, chapters: int, no_writer: bool) -> None:
         "violation": vio_store,
     }
 
+    aborted = False
     for n in range(start, chapters + 1):
         dump = _chapter_dump_dir(n)
         ctx_dir = dump / "context"
@@ -1056,17 +1096,38 @@ def _run_chapter_range(*, start: int, chapters: int, no_writer: bool) -> None:
         _ACTIVE_STEP = None
 
         ctx, tel = _ctx()
-        print(f"\n══ 第 {n}/{chapters} 章（skip_writer={no_writer}）══")
-        result = run_chapter(
-            ctx,
-            n,
-            l0=l0,
-            l1=l1,
-            l2=l2,
-            world=world,
-            stores=stores,
-            skip_writer=no_writer,
+        print(
+            f"\n══ 第 {n}/{chapters} 章"
+            f"（skip_writer={no_writer}, critic={'off' if no_critic else 'on'}）══"
         )
+        try:
+            result = run_chapter(
+                ctx,
+                n,
+                l0=l0,
+                l1=l1,
+                l2=l2,
+                world=world,
+                stores=stores,
+                skip_writer=no_writer,
+                enable_critic=not no_critic,
+            )
+        except Exception as exc:
+            tb = traceback.format_exc()
+            _dump_json(
+                out / "error.json",
+                {
+                    "chapter": n,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "traceback": tb,
+                },
+            )
+            print(f"✗ c{n} 未预期异常——不写 checkpoint，中止后续章")
+            print(tb)
+            print(_recovery_hint(failed_chapter=n))
+            _PROMPT_CTX_DIR = None
+            raise SystemExit(1) from exc
+
         _dump_model(out / "plan.json", result.plan)
         _dump_model(out / "scene_script.json", result.scene_script)
         _dump_model(out / "script.json", result.script)
@@ -1083,6 +1144,8 @@ def _run_chapter_range(*, start: int, chapters: int, no_writer: bool) -> None:
             print(f"⚠ {result.chapter} 挂起（未入库）——不写 checkpoint，中止后续章")
             print("trace:", " | ".join(result.trace))
             print("telemetry:", tel.summary())
+            print(_recovery_hint(failed_chapter=n))
+            aborted = True
             break
         print(f"consistency_status={result.consistency_status}")
         _save_checkpoint(n, consistency_status=result.consistency_status)
@@ -1094,6 +1157,8 @@ def _run_chapter_range(*, start: int, chapters: int, no_writer: bool) -> None:
     print(f"\n完成。章节目录：{CHAPTERS_DIR.resolve()}")
     print(f"检查点：{CHECKPOINTS_DIR.resolve()}")
     print("共享库：", STORES_DIR.resolve())
+    if aborted:
+        raise SystemExit(1)
 
 
 def _dump_model(path: Path, obj: BaseModel | None) -> None:
@@ -1130,6 +1195,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="创世未齐时自动补跑 g0–g5",
     )
+    p_auto.add_argument(
+        "--no-critic",
+        action="store_true",
+        help="场收束只跑硬检，跳过 Continuity Critic（走查加速）",
+    )
     p_roll = sub.add_parser("rollback", help="回到第 N 章末（--to 0 = G5）")
     p_roll.add_argument("--to", type=int, required=True, help="目标章号；0=G5")
     p_roll.add_argument(
@@ -1150,6 +1220,11 @@ def main(argv: list[str] | None = None) -> None:
         "--with-writer",
         action="store_true",
         help="渲染散文（默认跳过 Writer）",
+    )
+    p_cont.add_argument(
+        "--no-critic",
+        action="store_true",
+        help="场收束只跑硬检，跳过 Continuity Critic（走查加速）",
     )
     p_cp = sub.add_parser("checkpoint", help="查看/封存检查点")
     p_cp.add_argument(
@@ -1172,6 +1247,7 @@ def main(argv: list[str] | None = None) -> None:
             chapters=args.chapters,
             no_writer=not args.with_writer,
             genesis=args.genesis,
+            no_critic=args.no_critic,
         )
     elif args.cmd == "rollback":
         cmd_rollback(to=args.to, keep_dumps=args.keep_dumps)
@@ -1180,6 +1256,7 @@ def main(argv: list[str] | None = None) -> None:
             chapters=args.chapters,
             no_writer=not args.with_writer,
             from_chapter=args.from_chapter,
+            no_critic=args.no_critic,
         )
     elif args.cmd == "checkpoint":
         cmd_checkpoint(seal=args.seal)

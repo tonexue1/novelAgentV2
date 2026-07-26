@@ -67,6 +67,8 @@ class ScriptedProvider:
             return self._entailment(prompt)
         if "档案管理员" in role:
             return self._reconciler(prompt)
+        if "续写评审" in role:
+            return _j({"findings": []})
         return "{}"
 
     # ── 各节点产物 ──────────────────────────────────────────────

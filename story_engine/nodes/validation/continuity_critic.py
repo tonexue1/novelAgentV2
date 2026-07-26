@@ -24,18 +24,23 @@ _TASK = """对照既有设定审这一场，只挑**实打实的问题**，挑�
 看四类：
 - OOC：说话做事违背这个人的性格/三观/语气样本。
 - canon_contradiction：推翻了既有事实、设定或时间线（含"他怎么会知道"——引用了自己不知情的秘密）。
-- logic：场内因果说不通、承重拍没落地、动机断裂。
+- logic：场内因果说不通、承重拍没落地、动机断裂、少一拍铺垫。
 - voice：语气/文风跑偏。
 
 硬要求：
 - 每条问题指到具体的 beat_id（拿不准就留空，指到场）。
 - message 写"哪里错、和什么冲突"；suggestion 写一句可执行的改法。
-- refs 填被违背的既有条目 id（m./fs./th./sec./loc. 等），没有就留空。
-- severity：推翻 canon / 时间线矛盾 / 认知边界穿帮 → BLOCK；OOC、局部逻辑、语气偏 → CORRECT；
-  轻微风格瑕疵 → ADVISORY。
-- **不要**为了交差硬凑问题；没问题就 findings 空着。"""
+- refs 填被违背的既有条目 id（m./fs./th./sec./loc. 等）；标 BLOCK 时 **必须非空**。
+- severity（焊死，违反会被系统降级）：
+  - **禁止**对 logic / voice / OOC 标 BLOCK——这些最多 CORRECT。
+  - BLOCK **仅限** canon_contradiction，且能指出被推翻的既有条目：时间线矛盾 /
+    死人说话 / 认知边界穿帮 / 推翻已入库事实。空口指控（refs 空）不算。
+  - OOC、局部逻辑、动机不足、语气偏 → CORRECT；轻微风格瑕疵 → ADVISORY。
+- **不要**为了交差硬凑问题；没问题就 findings 空着。
+- 系统会把违规的 BLOCK（logic/voice/OOC/无 refs）强制降为 CORRECT——别指望用 BLOCK 换场重导。"""
 
 _ALLOWED_CATEGORIES = {"OOC", "canon_contradiction", "voice", "logic"}
+_SOFT_CATEGORIES = frozenset({"logic", "voice", "OOC", "other"})
 _SEVERITY_BY_NAME = {s.value: s for s in Severity}
 
 
@@ -94,15 +99,17 @@ class ContinuityCritic:
     def _to_violation(self, f: CriticFinding, *, chapter: int, scene) -> Violation:
         beat_ids = {b.beat_id for b in scene.beats}
         beat = f.beat_id if f.beat_id in beat_ids else None
+        category = f.category if f.category in _ALLOWED_CATEGORIES else "other"
+        refs = list(f.refs)
         return Violation(
             id=mint_violation_id(),
             chapter=chapter,
             stage="character",  # 评的是 Character 产物
             check_type="llm",
-            severity=_norm_severity(f.severity),
-            category=f.category if f.category in _ALLOWED_CATEGORIES else "other",
+            severity=_clamp_severity(_norm_severity(f.severity), category, refs),
+            category=category,
             locus=Locus(chapter=f"c{chapter}", scene=scene.scene_id, beat=beat),
-            refs=list(f.refs),
+            refs=refs,
             message=f.message,
             suggestion=f.suggestion,
             escalation_level="scene",
@@ -112,6 +119,20 @@ class ContinuityCritic:
 def _norm_severity(name: str) -> Severity:
     """认不出的档位按最轻处理——评审瞎报一个词不该把整章挂起。"""
     return _SEVERITY_BY_NAME.get((name or "").strip().upper(), Severity.ADVISORY)
+
+
+def _clamp_severity(severity: Severity, category: str, refs: list[str]) -> Severity:
+    """模型常把「少铺垫」标成 BLOCK/logic；代码焊死，不靠自觉。
+
+    BLOCK 仅保留：canon_contradiction 且 refs 非空。其余 BLOCK → CORRECT。
+    """
+    if severity != Severity.BLOCK:
+        return severity
+    if category in _SOFT_CATEGORIES:
+        return Severity.CORRECT
+    if category == "canon_contradiction" and not refs:
+        return Severity.CORRECT
+    return severity
 
 
 def _scene_view(scene) -> dict:
