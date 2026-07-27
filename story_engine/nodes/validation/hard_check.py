@@ -341,8 +341,9 @@ def check_scene(
     out: list[Violation] = []
 
     # ① 地点在册
-    #    WorldStore 目前不吸收涌现地点（WorldOp 未落库，M4），此时把"不在册"
-    #    当 CORRECT 会把每一场都拖进重导。先记 ADVISORY，等 WorldOp 接上再升级。
+    #    WorldStore 已吸收涌现地点（Reconciler→Applier 落 WorldOp），但吸收发生在
+    #    章末抽取/对账，晚于本场收束——涌现地点在其"诞生章"必然尚未在册。故此处
+    #    保持 ADVISORY：避免把 emergent-at-birth 的正常情形拖进重导。
     if world_ids and scene.location not in world_ids:
         out.append(
             make_violation(
