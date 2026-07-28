@@ -86,12 +86,35 @@ ArcOp:                                      # RecorderOutput.arc_ops 的元素
 
 ## 收束保证（防悬空）
 
-- **临期/逾期 surfacing**：Planner 每章拿临期 + 逾期清单，强提示优先收。
-- **逾期升级（按 importance）**：minor→卷复盘 auto-reschedule/abandon；major→显式决策留痕；core→逾期即 BLOCK 呼人。
-- **终局收束**：进最后一卷前，Replanner 生成 loose-ends report——所有非 FULFILLED/ABANDONED 伏笔必须排进终卷或显式 ABANDON。
+### 临期 / 逾期计算
+
+`payoff_deadline = {granularity, ref}`：
+
+| granularity | 到期下界（inclusive） | 临期窗口 |
+|-------------|---------------------|---------|
+| chapter | `ref` 的章号（`c12` → 12） | 到期前 2 章 |
+| volume | 该卷 `chapter_range` 末章；若未知则该卷 L2 `chapter_beats` 最大 `planned_seq` | 卷内最后 3 章 |
+| saga | 该篇覆盖卷的末章 | 篇内最后一卷 |
+
+- **due（临期）**：`deadline_ch - window ≤ chapter < deadline_ch` 且未终态
+- **overdue（逾期）**：`chapter ≥ deadline_ch` 且未终态（FULFILLED/ABANDONED）
+
+Planner 每章拿 `due + overdue` 清单，强提示优先收。
+
+### 逾期升级（按 importance）
+
+| importance | 逾期动作 |
+|------------|---------|
+| minor | 卷复盘可 auto-reschedule 或 abandon（须理由） |
+| major | 显式决策留痕（LooseEnd.recommendation），不可静默 |
+| **core** | **逾期即 BLOCK 呼人**；Consistency Gate / Replanner 均不可自动废 |
+
+### 终局收束
+
+进最后一卷前，Replanner 生成 loose-ends report——所有非 FULFILLED/ABANDONED 伏笔必须排进终卷或显式 ABANDON。
 
 ## 交叉引用
 
 - **写入增量**：[recorder-output](../artifacts/recorder-output.md) 的 `arc_ops`。
 - **意图源**：[plan-store](./plan-store.md) L1（foreshadow_map / threads）。
-- **配合**：[memory-store](./memory-store.md)（secret 认知边界）；[script-store](./script-store.md)（ChapterScript.foreshadow_ops）。
+- **配合**：[memory-store](./memory-store.md)（secret 认知边界）；[script-store](./script-store.md)（ChapterScript.foreshadow_ops）；[replanner](../../nodes/planning/replanner.md)。

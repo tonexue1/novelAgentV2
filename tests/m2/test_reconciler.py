@@ -183,3 +183,102 @@ def test_thread_op_on_foreshadow_coerced_to_noop(tmp_path):
     assert any("不适用于 foreshadow" in c.get("reason", "") for c in res.coerced)
     Applier().apply_recorder_output(res.output, mem, arc)
     assert arc.get("fs.debt").state == "PLANTED"
+
+
+def test_planned_reinforce_coerced_to_noop():
+    """PLANNED 上 REINFORCE → NOOP（state↔op），不炸 Applier。"""
+    arcs = [
+        ArcRecord(
+            id="fs.bond", kind="foreshadow", state="PLANNED",
+            desc="羁绊", origin="planned",
+        )
+    ]
+    candidates = RecorderOutput(
+        chapter=3,
+        arc_ops=[
+            ArcOp(
+                target_id="fs.bond", kind="foreshadow", op="REINFORCE",
+                evidence=[EvidenceSpan.parse("c3.s1.b1")],
+            )
+        ],
+    )
+    res = Reconciler().reconcile(
+        ctx=NodeContext(llm=None),
+        chapter=3,
+        candidates=candidates,
+        arcs=arcs,
+    )
+    assert res.output.arc_ops[0].op == "NOOP"
+    assert any("不允许 REINFORCE" in c.get("reason", "") for c in res.coerced)
+
+
+def test_ghost_world_update_coerced_to_noop(tmp_path):
+    """UPDATE_STATE 目标不在 WorldStore → NOOP，同批合法 REGISTER 仍可落。"""
+    from story_engine.primitives.enums import WorldTier
+    from story_engine.schemas.artifacts.recorder_output import WorldOp
+    from story_engine.schemas.stores.world import WorldEntity
+
+    mem: JsonStore[MemoryEntry] = JsonStore(MemoryEntry, tmp_path / "m.jsonl", key_field="id")
+    arc: JsonStore[ArcRecord] = JsonStore(ArcRecord, tmp_path / "a.jsonl", key_field="id")
+    world: JsonStore[WorldEntity] = JsonStore(WorldEntity, tmp_path / "w.jsonl", key_field="id")
+
+    candidates = RecorderOutput(
+        chapter=7,
+        world_ops=[
+            WorldOp(
+                entity_id="loc.dragon-gang-hall",
+                op="UPDATE_STATE",
+                state={"ruler": "x"},
+                evidence=[EvidenceSpan.parse("c7.s1.b1")],
+            ),
+            WorldOp(
+                entity_id="loc.shi_cun",
+                op="REGISTER",
+                canonical_name="石村",
+                kind="location",
+                evidence=[EvidenceSpan.parse("c7.s1.b1")],
+            ),
+        ],
+    )
+    res = Reconciler().reconcile(
+        ctx=NodeContext(llm=None),
+        chapter=7,
+        candidates=candidates,
+        worlds=list(world.all()),
+    )
+    assert res.output.world_ops[0].op == "NOOP"
+    assert res.output.world_ops[1].op == "REGISTER"
+    assert any("world 目标不存在" in c.get("reason", "") for c in res.coerced)
+    Applier().apply_recorder_output(res.output, mem, arc, world_store=world)
+    assert world.get("loc.dragon-gang-hall") is None
+    assert world.get("loc.shi_cun") is not None
+    assert world.get("loc.shi_cun").tier == WorldTier.MINOR
+
+
+def test_batch_register_then_update_allowed(tmp_path):
+    """同批先 REGISTER 再 UPDATE 同一 id → 放行。"""
+    from story_engine.schemas.artifacts.recorder_output import WorldOp
+    from story_engine.schemas.stores.world import WorldEntity
+
+    mem: JsonStore[MemoryEntry] = JsonStore(MemoryEntry, tmp_path / "m.jsonl", key_field="id")
+    arc: JsonStore[ArcRecord] = JsonStore(ArcRecord, tmp_path / "a.jsonl", key_field="id")
+    world: JsonStore[WorldEntity] = JsonStore(WorldEntity, tmp_path / "w.jsonl", key_field="id")
+    candidates = RecorderOutput(
+        chapter=3,
+        world_ops=[
+            WorldOp(
+                entity_id="loc.hall", op="REGISTER", kind="location",
+                evidence=[EvidenceSpan.parse("c3.s1.b1")],
+            ),
+            WorldOp(
+                entity_id="loc.hall", op="UPDATE_STATE", state={"open": True},
+                evidence=[EvidenceSpan.parse("c3.s1.b2")],
+            ),
+        ],
+    )
+    res = Reconciler().reconcile(
+        ctx=NodeContext(llm=None), chapter=3, candidates=candidates, worlds=[],
+    )
+    assert [o.op for o in res.output.world_ops] == ["REGISTER", "UPDATE_STATE"]
+    Applier().apply_recorder_output(res.output, mem, arc, world_store=world)
+    assert world.get("loc.hall").state.get("open") is True

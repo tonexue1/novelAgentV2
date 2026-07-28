@@ -28,7 +28,8 @@ GateAction = Literal[
     "retry_scene",     # 同场重跑
     "redirect_scene",  # 场重导：Director·setup 重出该场合同
     "replan_chapter",  # 整章重规划：Planner 重来
-    "block",           # 爬满阶梯仍不过 → 挂起该章
+    "escalate_volume", # 第④级：挂起本章 + 编排层调 Replanner
+    "block",           # 兼容：等同 escalate_volume（爬满）
 ]
 
 
@@ -191,10 +192,10 @@ class ConsistencyGate:
             self._replans += 1
             self.tracker.note_attempt(level="chapter", outcome="replan", violations=vios)
             return GateDecision("replan_chapter", vios, report=report)
-        # 爬满阶梯：BLOCK 永不静默入库 —— 挂起该章 + 呼人
-        self.tracker.note_attempt(level="chapter", outcome="exhausted", violations=vios)
+        # 第④级：挂起本章，编排层触发卷复盘
+        self.tracker.note_attempt(level="volume", outcome="escalate", violations=vios)
         self.tracker.settle("blocked", violations=vios)
-        return GateDecision("block", vios, report=report)
+        return GateDecision("escalate_volume", vios, report=report)
 
     def reset_scene(self, scene_id: str) -> None:
         """场重来：拍级预算重新给（新合同下的拍是新的机会）。"""

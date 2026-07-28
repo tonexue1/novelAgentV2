@@ -37,7 +37,8 @@ def section(title: str, body: str) -> str:
 def build_prompt(role: str, task: str, sections: Iterable[tuple[str, str]]) -> str:
     """role（你是谁）+ task（干什么）+ 若干上下文分节。
 
-    结构化输出的 schema 由 instructor 注入，模板里不再重复描述字段。
+    结构化输出的 JSON Schema 仍由 instructor 注入；
+    **合法取值说明**由各 schema.llm_vocab() 以分节形式挂进 sections，禁止节点手抄枚举。
     """
     parts = [f"# 角色\n{role}", f"# 任务\n{task}"]
     parts.extend(section(t, b) for t, b in sections if b)

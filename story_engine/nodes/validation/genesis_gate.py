@@ -27,7 +27,7 @@ def check_closure(
     max_iter: int = 3,
 ) -> GenesisGap:
     """纯函数：给定 L0 + L1 + WorldStore 快照，返回 GenesisGap 诊断。"""
-    by_id: dict[str, WorldEntity] = {w.entity_id: w for w in world}
+    by_id: dict[str, WorldEntity] = {w.id: w for w in world}
 
     dangling: list[str] = []
     missing_def: list[str] = []

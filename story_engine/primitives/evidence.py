@@ -62,6 +62,15 @@ class EvidenceSpan(BaseModel):
     def __str__(self) -> str:  # pragma: no cover - 便捷
         return self.to_str()
 
+    @classmethod
+    def llm_vocab(cls) -> str:
+        return (
+            "EvidenceSpan（每条 op 必填 evidence[]）：\n"
+            '- {"chapter": int必填, "scene": int可选, "beats": [from,to]可选}\n'
+            "- scene 省略=整章；beats 省略=整场；有 beats 时 scene 必填。\n"
+            "- 简写等价：c12 / c12.s3 / c12.s3.b5 / c12.s3.b5-8；填写时用对象字段。"
+        )
+
 
 class StoryTime(BaseModel):
     """叙事内时间，供时间线硬检。全部可选。"""
@@ -69,3 +78,10 @@ class StoryTime(BaseModel):
     day: int | None = None
     clock: str | None = None  # "黄昏" / "三更" / "10:30"
     relative: str | None = None  # "三日后" / "同一时刻"
+
+    @classmethod
+    def llm_vocab(cls) -> str:
+        return (
+            "StoryTime（叙事内时间，可选）：day?:int / clock?:str / relative?:str。"
+        )
+

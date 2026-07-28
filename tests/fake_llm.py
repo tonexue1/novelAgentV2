@@ -53,6 +53,8 @@ class ScriptedProvider:
             return self._worldbuilder(prompt)
         if "分章规划师" in role:
             return self._planner()
+        if "卷复盘" in role:
+            return self._replanner(prompt)
         if "导演" in role:
             return self._setup(prompt)
         if "现场调度" in role:
@@ -63,6 +65,8 @@ class ScriptedProvider:
             return "叶凡踏入青云门时，天光正落在石阶上。他抬头，看见了那道熟悉的身影。"
         if "记录员" in role:
             return self._extractor(prompt)
+        if "摘要员" in role:
+            return self._summarizer(prompt)
         if "校验员" in role:
             return self._entailment(prompt)
         if "档案管理员" in role:
@@ -169,9 +173,10 @@ class ScriptedProvider:
         return _j({
             "entities": [
                 {
-                    "entity_id": r,
+                    "id": r,
                     "canonical_name": r.split(".")[-1],
                     "tier": "core",
+                    "origin": "seeded",
                     "definition": f"{r} 的权威定义。",
                 }
                 for r in refs
@@ -256,6 +261,54 @@ class ScriptedProvider:
                 },
             ],
             "arc_ops": [],
+        })
+
+    def _summarizer(self, prompt: str) -> str:
+        chapter = 2 if "第 2 章" in prompt else 1
+        cid = f"c{chapter}"
+        sid = f"{cid}.s1"
+        return _j({
+            "entries": [
+                {
+                    "level": "scene",
+                    "ref": sid,
+                    "text": "叶凡叩门求试。",
+                    "cast": ["char.ye_fan"],
+                    "threads": ["th.main_road"],
+                    "covers": [{"chapter": chapter, "scene": 1}],
+                },
+                {
+                    "level": "chapter",
+                    "ref": cid,
+                    "text": "叶凡拜入青云门，立下志向。",
+                    "cast": ["char.ye_fan"],
+                    "threads": ["th.main_road"],
+                    "covers": [{"chapter": chapter}],
+                },
+            ]
+        })
+
+    def _replanner(self, prompt: str) -> str:
+        return _j({
+            "drift_report": {
+                "thread_lag": 0.5,
+                "foreshadow_overdue_rate": 0.0,
+                "violation_density": 0.0,
+                "notes": [],
+            },
+            "action": "hold",
+            "volume_summary": {
+                "level": "volume",
+                "ref": "v1",
+                "text": "第一卷：叶凡入门，立下志向。",
+                "t_valid": 4,
+                "produced_by": "Replanner",
+            },
+            "loose_ends": [],
+            "confirmed_tiers": [],
+            "confirmed_emergent": [],
+            "world_promote": [],
+            "human_gate": None,
         })
 
     def _entailment(self, prompt: str) -> str:

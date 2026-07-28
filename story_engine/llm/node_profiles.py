@@ -42,8 +42,10 @@ _DEFAULT_SPEC: dict[str, tuple[str | None, ThinkingMode, str]] = {
     "faithfulness_check": (FAST_MODEL, "disabled", "蕴含判定，关推理"),
     "reconciler": (FAST_MODEL, "disabled", "对账动作选择，关推理"),
     "extractor": (FAST_MODEL, "disabled", "贵在输出长，不在推理"),
+    "summarizer": (FAST_MODEL, "disabled", "蒸馏摘要，关推理"),
     # 规划/创世：仍走全局默认模型；thinking 暂 inherit（本轮不动）
     "planner": (None, "inherit", "章规划；本轮保持 API 默认"),
+    "replanner": (None, "inherit", "卷复盘；漂移度量"),
     "director_setup": (None, "inherit", "拆场；本轮保持 API 默认"),
     "director_setup_redirect": (None, "inherit", "场重导；同 setup"),
     "architect": (None, "inherit", "创世/扩卷"),

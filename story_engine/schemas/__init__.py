@@ -41,7 +41,8 @@ from story_engine.schemas.stores.script import (
     Thought,
 )
 from story_engine.schemas.stores.violation import EscalationStep, Locus, Violation
-from story_engine.schemas.stores.world import WorldEntity
+from story_engine.schemas.stores.world import WorldEntity, WorldRelation
+from story_engine.schemas.stores.summary import KeyOp, SummaryDelta, SummaryEntry
 
 __all__ = [
     "GenesisGap",
@@ -54,6 +55,9 @@ __all__ = [
     "Seed",
     "ArcRecord",
     "MemoryEntry",
+    "SummaryEntry",
+    "SummaryDelta",
+    "KeyOp",
     "L0",
     "L1",
     "L2",
@@ -86,4 +90,5 @@ __all__ = [
     "Locus",
     "EscalationStep",
     "WorldEntity",
+    "WorldRelation",
 ]

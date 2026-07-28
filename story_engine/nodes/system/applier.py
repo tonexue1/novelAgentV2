@@ -1,24 +1,33 @@
-"""Applier（确定性落库）—— 对应 docs/nodes/system/applier.md + arc-store 状态机。
+"""Applier（确定性落库）—— 对应 docs/nodes/system/applier.md + arc/world/summary 状态机。
 
-U（固化）的确定性半边：抽取是 LLM（Extractor, M2），应用是确定性（本节点, M1）。
+U（固化）的确定性半边：抽取是 LLM（Extractor, M2），应用是确定性（本节点）。
 职责：
   - beat 定序：ChapterScript 提交时铸永久 beat id。
-  - 应用 RecorderOutput：MemOp → MemoryStore（ADD/REINFORCE/SOFT-INVALIDATE/NOOP）、
-    ArcOp → ArcStore 状态机转移（含守卫、history 回溯、secret REVEAL）。
+  - 应用 RecorderOutput：MemOp / ArcOp / WorldOp / TierNom。
+  - 应用 SummaryDelta：SummaryStore 幂等 upsert（level,ref）。
   - 据 L1 建初始 ArcStore 台账（创世用）。
-状态机守卫：非法转移（如 FULFILL 未 PLANT、改动终态）直接 raise，fail-fast。
+状态机守卫：非法转移直接 raise，fail-fast。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from story_engine.primitives.enums import CharTier, WorldTier
 from story_engine.primitives.ids import mint_beat, mint_memory_id
-from story_engine.schemas.artifacts.recorder_output import ArcOp, MemOp, RecorderOutput
+from story_engine.schemas.artifacts.recorder_output import (
+    ArcOp,
+    MemOp,
+    RecorderOutput,
+    TierNom,
+    WorldOp,
+)
 from story_engine.schemas.stores.arc import ArcRecord, ArcTransition, Knowledge, ThreadAdvance
 from story_engine.schemas.stores.memory import MemoryEntry
 from story_engine.schemas.stores.plan import L1
 from story_engine.schemas.stores.script import ChapterScript
+from story_engine.schemas.stores.summary import SummaryDelta, SummaryEntry
+from story_engine.schemas.stores.world import WorldEntity, WorldKind, _PREFIX_KIND
 
 # fs/秘密状态机：op → (合法前态集, 新态)
 _FS_TRANS = {
@@ -27,7 +36,6 @@ _FS_TRANS = {
     "FULFILL": ({"PLANTED", "REINFORCED"}, "FULFILLED"),
 }
 _FS_TERMINAL = {"FULFILLED", "ABANDONED"}
-# thread 状态机
 _THREAD_TRANS = {
     "ADVANCE": ({"OPEN", "ADVANCING"}, "ADVANCING"),
     "CLIMAX": ({"ADVANCING"}, "CLIMAX"),
@@ -41,12 +49,23 @@ class ApplyResult:
     added_mem: list[str] = field(default_factory=list)
     reinforced_mem: list[str] = field(default_factory=list)
     invalidated_mem: list[str] = field(default_factory=list)
-    arc_transitions: list[tuple[str, str]] = field(default_factory=list)  # (id, new_state)
-    noops: list[str] = field(default_factory=list)                        # 留档供审计
+    arc_transitions: list[tuple[str, str]] = field(default_factory=list)
+    world_ops_applied: list[str] = field(default_factory=list)
+    tier_noms_applied: list[str] = field(default_factory=list)
+    summaries_upserted: list[str] = field(default_factory=list)
+    noops: list[str] = field(default_factory=list)
 
 
 class Applier:
     name = "applier"
+
+    def __init__(self, embedder=None) -> None:
+        self.embedder = embedder
+
+    def _embed_text(self, text: str) -> list[float] | None:
+        if self.embedder is None or not text:
+            return None
+        return self.embedder.embed([text])[0]
 
     # ── 创世：据 L1 建初始台账 ──────────────────────────────
     def init_arcs(self, l1: L1) -> list[ArcRecord]:
@@ -76,12 +95,59 @@ class Applier:
         return script
 
     # ── 应用抽取增量 ────────────────────────────────────────
-    def apply_recorder_output(self, ro: RecorderOutput, mem_store, arc_store) -> ApplyResult:
+    def apply_recorder_output(
+        self,
+        ro: RecorderOutput,
+        mem_store,
+        arc_store,
+        world_store=None,
+        *,
+        apply_tier_noms: bool = False,
+    ) -> ApplyResult:
+        """apply_tier_noms=False：提名只留档，等 Replanner 卷末确认后再落（默认）。
+        True：立即落 MemoryEntry.tier（测试 / Replanner 确认后调用）。
+        """
         result = ApplyResult()
         for op in ro.mem_ops:
             self._apply_mem_op(op, ro.chapter, mem_store, result)
         for op in ro.arc_ops:
             self._apply_arc_op(op, ro.chapter, arc_store, result)
+        if world_store is not None:
+            for op in ro.world_ops:
+                self._apply_world_op(op, ro.chapter, world_store, result)
+        for nom in ro.tier_noms:
+            if apply_tier_noms:
+                self._apply_tier_nom(nom, mem_store, result)
+            else:
+                result.noops.append(f"tier_nom:{nom.char}")  # 提名留档，未确认
+        return result
+
+    def apply_summary_delta(self, delta: SummaryDelta, summary_store) -> ApplyResult:
+        """幂等 upsert：(level,ref) 已存在则替换。"""
+        result = ApplyResult()
+        for entry in delta.entries:
+            entry.t_valid = entry.t_valid or delta.chapter
+            entry.produced_by = delta.produced_by
+            if entry.vec is None:
+                entry.vec = self._embed_text(entry.text)
+            key = entry.store_key
+            existing = summary_store.get(key)
+            if existing is None:
+                summary_store.append(entry)
+            else:
+                summary_store.update(
+                    key,
+                    text=entry.text,
+                    vec=entry.vec,
+                    covers=entry.covers,
+                    threads=entry.threads,
+                    cast=entry.cast,
+                    key_ops=entry.key_ops,
+                    t_valid=entry.t_valid,
+                    produced_by=entry.produced_by,
+                    summarizer_version=entry.summarizer_version,
+                )
+            result.summaries_upserted.append(key)
         return result
 
     # ── MemOp ───────────────────────────────────────────────
@@ -103,6 +169,7 @@ class Applier:
                 goal_kind=op.goal_kind,
                 parent=op.parent,
                 example=op.example,
+                vec=self._embed_text(op.text or ""),
             )
             mem_store.append(entry)
             result.added_mem.append(entry.id)
@@ -119,6 +186,80 @@ class Applier:
             if op.target_id and mem_store.get(op.target_id) is not None:
                 mem_store.update(op.target_id, t_invalid=chapter, resolution=op.resolution)
                 result.invalidated_mem.append(op.target_id)
+
+    # ── WorldOp ─────────────────────────────────────────────
+    @staticmethod
+    def _resolve_world_kind(op: WorldOp) -> WorldKind | None:
+        """合法前缀 + 可选 kind → 落库 kind；非法（如 char.*）返回 None → 调用方 NOOP。"""
+        prefix = op.entity_id.split(".", 1)[0] if "." in op.entity_id else ""
+        from_prefix = _PREFIX_KIND.get(prefix)
+        if from_prefix is None:
+            return None
+        if op.kind is None:
+            return from_prefix
+        if op.kind != from_prefix:
+            return None
+        return op.kind
+
+    def _apply_world_op(self, op: WorldOp, chapter: int, world_store, result: ApplyResult) -> None:
+        if op.op == "NOOP":
+            result.noops.append(op.entity_id)
+            return
+        existing = world_store.get(op.entity_id)
+        if op.op == "REGISTER":
+            if existing is not None:
+                result.noops.append(f"register_exists:{op.entity_id}")
+                return
+            kind = self._resolve_world_kind(op)
+            if kind is None:
+                # 角色等非 world 前缀、或 kind 与前缀冲突：降级 NOOP，不拖死整章
+                result.noops.append(f"invalid_world_kind:{op.entity_id}:{op.kind}")
+                return
+            ent = WorldEntity(
+                id=op.entity_id,
+                canonical_name=op.canonical_name or op.entity_id.split(".", 1)[-1],
+                aliases=list(op.aliases),
+                kind=kind,
+                tier=op.tier if isinstance(op.tier, WorldTier) else WorldTier(op.tier),
+                origin="emergent",
+                definition=op.definition,
+                state=dict(op.state),
+                t_valid=chapter,
+                established_ch=chapter,
+                evidence=list(op.evidence),
+            )
+            world_store.append(ent)
+            result.world_ops_applied.append(op.entity_id)
+        elif op.op == "UPDATE_STATE":
+            if existing is None:
+                raise ValueError(f"UPDATE_STATE 目标不存在: {op.entity_id}")
+            merged = {**existing.state, **op.state}
+            world_store.update(
+                op.entity_id,
+                state=merged,
+                evidence=existing.evidence + list(op.evidence),
+                version=existing.version + 1,
+            )
+            result.world_ops_applied.append(op.entity_id)
+        elif op.op == "SOFT-INVALIDATE":
+            if existing is None:
+                raise ValueError(f"SOFT-INVALIDATE 目标不存在: {op.entity_id}")
+            world_store.update(op.entity_id, t_invalid=chapter)
+            result.world_ops_applied.append(op.entity_id)
+        else:
+            raise ValueError(f"未知 WorldOp: {op.op}")
+
+    # ── TierNom ─────────────────────────────────────────────
+    def _apply_tier_nom(self, nom: TierNom, mem_store, result: ApplyResult) -> None:
+        """把 scope=char.* 的画像条目 tier 升到 to_tier（取 max，不降）。"""
+        scope = nom.char if nom.char.startswith("char.") else f"char.{nom.char}"
+        updated = 0
+        for m in mem_store.query(scope=scope):
+            current = int(m.tier) if m.tier is not None else 3
+            if nom.to_tier < current:  # tier 数字越小越高
+                mem_store.update(m.id, tier=CharTier(nom.to_tier))
+                updated += 1
+        result.tier_noms_applied.append(nom.char if updated else f"noop:{nom.char}")
 
     # ── ArcOp（状态机守卫）──────────────────────────────────
     def _apply_arc_op(self, op: ArcOp, chapter: int, arc_store, result: ApplyResult) -> None:

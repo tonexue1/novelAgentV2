@@ -63,6 +63,29 @@ WorldEntity:
 | **major** | Worldbuilder / 晋升 | 权威 | 按需检索(involves/loc/语义) | Critic 软校验 |
 | **minor** | 生产层现场造、Recorder 登记 | 轻量自动 | 基本不进 | 不硬校验 |
 
+## WorldOp（演化域写入）
+
+权威字段表见 [recorder-output](../artifacts/recorder-output.md) 的 `WorldOp`。语义：
+
+| op | 效果 |
+|----|------|
+| REGISTER | 新建实体（默认 `origin=emergent`、`tier=minor`）；已存在则 NOOP |
+| UPDATE_STATE | 合并 `state`；若需保留旧 state 可先 SOFT-INVALIDATE 再建（as-of） |
+| SOFT-INVALIDATE | 设 `t_invalid=本章`，不删 |
+| NOOP | 留档，不碰库 |
+
+## minor → major/core 晋升触发信号
+
+Recorder 章末可提名；**Replanner 卷末确认**后才改 tier / 唤 Worldbuilder 补权威 definition。触发信号（任一满足即可提名）：
+
+| 信号 | 判据 | 说明 |
+|------|------|------|
+| 复现 | 同 `entity_id` 在 ≥3 章的 `world_ops` / `involves` 中出现 | 长尾变承重 |
+| 跨场景 | 同实体出现在 ≥2 个不同 `loc.*` 场景 | 超出单场道具 |
+| 显著度 | 关联 fact 的 `salience` 均值 ≥ 0.7，或被 L1/L2 显式引用 | 情节承重 |
+
+core 晋升必须人工确认；major 可由 Replanner 自动确认并唤 Worldbuilder。
+
 ## 三根防漂移支柱 / 不变式
 
 1. 权威 `definition` 唯一 + 涉及即注入（LLM 只读不重编）。

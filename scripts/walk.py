@@ -62,6 +62,7 @@ from story_engine.orchestrator.loop import (
     _related_memories,
     _to_scene,
     run_chapter,
+    run_volume_review,
 )
 from story_engine.primitives.ids import mint_chapter
 from story_engine.schemas.artifacts.chapter_plan import ChapterPlan
@@ -617,11 +618,12 @@ def step_extract() -> None:
     _prepare_step("extract")
     ctx, tel = _ctx()
     script = _load_out("script", "script.json", ChapterScript)
-    mem, _ = _mem_arc_stores()
+    mem, arc = _mem_arc_stores()
     print("调用 Extractor.extract …")
     out = Extractor().extract(
         ctx, chapter=CHAPTER, script=script,
         related_memories=_brief_memories(mem, CHAPTER),
+        arcs=list(arc.all()),
     )
     _save_out("extract", "candidates.json", out)
     _finish_step("extract")
@@ -655,13 +657,20 @@ def step_reconcile() -> None:
     ctx, tel = _ctx()
     verified = _load_out("faithful", "verified.json", RecorderOutput)
     mem, arc = _mem_arc_stores()
+    from story_engine.schemas.stores.world import WorldEntity
+    from story_engine.stores.json_backend import JsonStore
+
+    world = JsonStore(WorldEntity, STORES_DIR / "world.jsonl", key_field="id")
     print("调用 Reconciler.reconcile + Applier …")
     res = Reconciler().reconcile(
         ctx, chapter=CHAPTER, candidates=verified,
         related=_related_memories(mem, CHAPTER),
-        arcs=arc.all(),
+        arcs=list(arc.all()),
+        worlds=list(world.all()),
     )
-    apply_result = Applier().apply_recorder_output(res.output, mem, arc)
+    apply_result = Applier().apply_recorder_output(
+        res.output, mem, arc, world_store=world,
+    )
     _save_out("reconcile", "reconciled.json", res.output)
     _save_out("reconcile", "coerced.json", res.coerced)
     _save_out(
@@ -1068,19 +1077,32 @@ def _run_chapter_range(
 
     script_store, ms_store = _script_ms_stores()
     mem_store, arc_store = _mem_arc_stores()
+    from story_engine.schemas.stores.summary import SummaryEntry
     from story_engine.schemas.stores.violation import Violation
 
     vio_path = STORES_DIR / "violation.jsonl"
     vio_store: JsonStore[Violation] = JsonStore(Violation, vio_path, key_field="id")
+    world_store: JsonStore[WorldEntity] = JsonStore(
+        WorldEntity, STORES_DIR / "world.jsonl", key_field="id"
+    )
+    if len(world_store) == 0:
+        for w in world:
+            world_store.append(w)
+    summary_store: JsonStore[SummaryEntry] = JsonStore(
+        SummaryEntry, STORES_DIR / "summary.jsonl", key_field="key"
+    )
     stores = {
         "script": script_store,
         "mem": mem_store,
         "arc": arc_store,
         "manuscript": ms_store,
         "violation": vio_store,
+        "world": world_store,
+        "summary": summary_store,
     }
 
     aborted = False
+    volume_end = max((b.planned_seq for b in l2.chapter_beats), default=chapters) if l2 else chapters
     for n in range(start, chapters + 1):
         dump = _chapter_dump_dir(n)
         ctx_dir = dump / "context"
@@ -1152,6 +1174,24 @@ def _run_chapter_range(
         print("trace:", " | ".join(result.trace))
         print("telemetry:", tel.summary())
         print(f"产物：{dump}/out/")
+
+        # 卷末：触发 Replanner 复盘
+        if n == volume_end:
+            print(f"\n── 卷末复盘（vol={l2.vol_id if l2 else 'v1'} @ c{n}）──")
+            review = run_volume_review(
+                ctx,
+                chapter=n,
+                vol_id=l2.vol_id if l2 else "v1",
+                l0=l0,
+                l1=l1,
+                l2=l2,
+                stores=stores,
+                chapters_in_volume=max(1, n - start + 1),
+            )
+            _dump_model(out / "volume_review.json", review)
+            if review.human_gate:
+                print(f"⚠ human_gate: {review.human_gate}")
+            print(f"action={review.action} loose_ends={len(review.loose_ends)}")
 
     _PROMPT_CTX_DIR = None
     print(f"\n完成。章节目录：{CHAPTERS_DIR.resolve()}")

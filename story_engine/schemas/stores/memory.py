@@ -37,4 +37,13 @@ class MemoryEntry(SchemaModel, Temporal):
     example: str | None = None       # voice 真实台词例句（few-shot 库）
     tier: CharTier = CharTier.T3     # 角色分层（画像完整度/检索降权）
     ability_rank: int | None = None  # ability 台阶序（修为单调硬检）
-    # 注：vec（embedding）留 M4；派生投影版本化重建走 arc-store 侧，MemoryEntry 暂不带 version。
+    vec: list[float] | None = None   # embedding；建在 text 上（M4 Embedder 写入）
+
+    @classmethod
+    def llm_vocab(cls) -> str:
+        return (
+            "MemoryEntry（入参旧记忆行）：\n"
+            "- id: m.{ulid}；type: fact|belief|trait|voice|ability|goal\n"
+            "- scope: char.{slug}|th.{slug}|global；text；t_valid\n"
+            "- 抽取时 mem_ops.action 先 ADD；是否改成 REINFORCE 由下游对账。"
+        )

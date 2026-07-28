@@ -69,3 +69,28 @@ class ArcRecord(SchemaModel):
     def knows_as_of(self, char: str, chapter: int) -> bool:
         """secret 认知边界：char 在第 chapter 章是否知情。"""
         return any(k.char == char and k.since_ch <= chapter for k in self.knowledge)
+
+    @classmethod
+    def llm_vocab(cls) -> str:
+        return (
+            "ArcRecord（入参台账行；写 ArcOp 前必看 state/thread_state）：\n"
+            "- id: fs.|sec.|th.{slug}\n"
+            "- kind: foreshadow | secret | thread\n"
+            "- foreshadow/secret.state: PLANNED | PLANTED | REINFORCED | FULFILLED | ABANDONED\n"
+            "- thread.thread_state: OPEN | ADVANCING | CLIMAX | RESOLVED | DROPPED\n"
+            "- 对 PLANNED 只能 PLANT（或 NOOP），不能 REINFORCE/FULFILL。"
+        )
+
+    @classmethod
+    def llm_input_brief(cls, arcs: list["ArcRecord"], *, limit: int = 60) -> str:
+        """入参上下文：当前台账摘要 + 本 schema 取值说明。"""
+        lines = [cls.llm_vocab(), "", "当前台账（id / kind / state）："]
+        if not arcs:
+            lines.append("（空）")
+            return "\n".join(lines)
+        for a in arcs[:limit]:
+            st = a.state if a.kind != "thread" else a.thread_state
+            lines.append(f"- {a.id} | {a.kind} | {st}")
+        if len(arcs) > limit:
+            lines.append(f"…另有 {len(arcs) - limit} 条未列出")
+        return "\n".join(lines)

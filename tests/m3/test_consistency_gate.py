@@ -102,7 +102,7 @@ def test_block_ladder_ends_in_block_action():
         "replan_chapter"
     )
     d3 = gate.scene_gate(ctx, scene=scene, contract=contract, chapter=1, critic=critic)
-    assert d3.action == "block"
+    assert d3.action == "escalate_volume"
     assert all(v.resolution == "blocked" for v in d3.violations)
 
 

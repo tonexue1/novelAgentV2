@@ -2,6 +2,9 @@
 
 对应 docs/schema/ 的 pydantic 落地。字段以 docs/schema/ 为权威；
 跑出来若与文档冲突，回改文档并记版本（见 ROADMAP「schema 是当前最佳假设」）。
+
+LLM 约定：凡进 complete_structured 的响应模型及其入参上下文 schema，
+须提供 llm_vocab()（取值说明）；节点 prompt 引用之，禁止手抄第三份枚举。
 """
 
 from __future__ import annotations
@@ -17,6 +20,11 @@ class SchemaModel(BaseModel):
         validate_assignment=True,
         frozen=False,
     )
+
+    @classmethod
+    def llm_vocab(cls) -> str:
+        """给模型看的取值/形状说明。LLM 面向 schema 必须覆盖；默认空串。"""
+        return ""
 
 
 class Temporal:

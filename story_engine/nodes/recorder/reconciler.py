@@ -8,8 +8,8 @@
   - NOOP 留档供审计与幂等重建，Applier 只记日志不碰库；
   - 去重键 (scope, type, 归一化 text)。
 
-LLM 定语义、系统兜底：LLM 判完之后，`_sanitize` 会把指不到实体的
-target_id 一律降级；`_sanitize_arcs` 处理幽灵弧线 id。
+LLM 定语义、系统兜底：LLM 判完之后，`_sanitize` / `_sanitize_arcs` /
+`_sanitize_world_ops` 一律降级非法 op。
 绝不把非法 op 放给 Applier（那边是 fail-fast 的）。
 """
 
@@ -21,10 +21,11 @@ from dataclasses import dataclass, field
 
 from story_engine.nodes.base import NodeContext
 from story_engine.nodes.prompting import as_json, build_prompt
-from story_engine.schemas.artifacts.recorder_output import ArcOp, MemOp, RecorderOutput
+from story_engine.schemas.artifacts.recorder_output import ArcOp, MemOp, RecorderOutput, WorldOp
 from story_engine.schemas.base import SchemaModel
 from story_engine.schemas.stores.arc import ArcRecord
 from story_engine.schemas.stores.memory import MemoryEntry
+from story_engine.schemas.stores.world import WorldEntity, _PREFIX_KIND
 
 _ROLE = "你是档案管理员，负责把新抽出的条目和旧档案对账，决定每条**怎么入库**。"
 _TASK = """逐条决定写回动作：
@@ -49,6 +50,19 @@ _OPS_BY_KIND = {
     "secret": frozenset({"PLANT", "REINFORCE", "FULFILL", "ABANDON", "REVEAL", "NOOP"}),
     "thread": frozenset({"ADVANCE", "CLIMAX", "RESOLVE", "DROP", "NOOP"}),
 }
+# 与 Applier 同一张转移表（state ↔ op）
+_FS_TRANS = {
+    "PLANT": ({"PLANNED"}, "PLANTED"),
+    "REINFORCE": ({"PLANTED", "REINFORCED"}, "REINFORCED"),
+    "FULFILL": ({"PLANTED", "REINFORCED"}, "FULFILLED"),
+}
+_FS_TERMINAL = frozenset({"FULFILLED", "ABANDONED"})
+_THREAD_TRANS = {
+    "ADVANCE": ({"OPEN", "ADVANCING"}, "ADVANCING"),
+    "CLIMAX": ({"ADVANCING"}, "CLIMAX"),
+    "RESOLVE": ({"CLIMAX"}, "RESOLVED"),
+}
+_THREAD_TERMINAL = frozenset({"RESOLVED", "DROPPED"})
 
 
 @dataclass
@@ -72,9 +86,11 @@ class Reconciler:
         candidates: RecorderOutput,
         related: list[MemoryEntry] | None = None,
         arcs: list[ArcRecord] | None = None,
+        worlds: list[WorldEntity] | None = None,
     ) -> ReconcileResult:
         related = related or []
         arcs = arcs or []
+        worlds = worlds or []
         known_arcs = {a.id for a in arcs}
         coerced: list[dict] = []
 
@@ -101,16 +117,26 @@ class Reconciler:
             mem_ops = self._dedupe(mem_ops, related, coerced)
 
         known_kinds = {a.id: a.kind for a in arcs}
+        known_states = {
+            a.id: (a.thread_state if a.kind == "thread" else a.state)
+            for a in arcs
+        }
         arc_ops, arc_coerced = self._sanitize_arcs(
-            candidates.arc_ops, known_arcs, known_kinds
+            candidates.arc_ops, known_arcs, known_kinds, known_states
         )
         coerced.extend(arc_coerced)
+
+        world_ops, world_coerced = self._sanitize_world_ops(
+            candidates.world_ops, {w.id for w in worlds}
+        )
+        coerced.extend(world_coerced)
+
         return ReconcileResult(
             output=RecorderOutput(
                 chapter=candidates.chapter,
                 mem_ops=mem_ops,
                 arc_ops=arc_ops,
-                world_ops=candidates.world_ops,
+                world_ops=world_ops,
                 tier_noms=candidates.tier_noms,
                 extractor_version=candidates.extractor_version,
             ),
@@ -142,9 +168,12 @@ class Reconciler:
         ops: list[ArcOp],
         known_ids: set[str],
         known_kinds: dict[str, str] | None = None,
+        known_states: dict[str, str | None] | None = None,
     ) -> tuple[list[ArcOp], list[dict]]:
-        """幽灵 id / 错配 op：补前缀、升涌现、按 kind 拦非法转移，绝不放给 Applier。"""
+        """幽灵 id / kind↔op / state↔op：非法一律 NOOP，绝不放给 Applier。"""
         known_kinds = dict(known_kinds or {})
+        known_states = dict(known_states or {})
+        known_ids = set(known_ids)
         out: list[ArcOp] = []
         coerced: list[dict] = []
         for op in ops:
@@ -175,14 +204,18 @@ class Reconciler:
                     "to": "default",
                     "reason": f"is_new 缺 draft，补默认: {tid}",
                 })
-            kind = known_kinds.get(tid) or updates.get("kind") or op.kind
-            if tid not in known_ids:
-                # 涌现：以 op.kind 为准（或 draft），记进本批 kind 表
+
+            emerging = tid not in known_ids
+            kind = known_kinds.get(tid) or op.kind
+            if emerging:
                 kind = op.kind
                 known_kinds[tid] = kind
-                known_ids = known_ids | {tid}
+                known_ids.add(tid)
+                # 新建台账默认前态（与 Applier._create_from_draft 一致）
+                known_states[tid] = "OPEN" if kind == "thread" else "PLANNED"
+
             allowed = _OPS_BY_KIND.get(kind, frozenset({"NOOP"}))
-            final_op = op.op
+            final_op = updates.get("op", op.op)
             if final_op not in allowed:
                 coerced.append({
                     "from": final_op,
@@ -190,7 +223,93 @@ class Reconciler:
                     "reason": f"op {final_op} 不适用于 {kind}（{tid}）",
                 })
                 updates["op"] = "NOOP"
+                final_op = "NOOP"
+
+            if final_op != "NOOP" and final_op != "REVEAL":
+                cur = known_states.get(tid)
+                ok, new_state, reason = _arc_transition_ok(kind, cur, final_op)
+                if not ok:
+                    coerced.append({
+                        "from": final_op,
+                        "to": "NOOP",
+                        "reason": reason or f"状态 {cur} 不允许 {final_op}（{tid}）",
+                    })
+                    updates["op"] = "NOOP"
+                    final_op = "NOOP"
+                elif new_state is not None:
+                    known_states[tid] = new_state
+            elif final_op == "ABANDON":
+                known_states[tid] = "ABANDONED"
+            elif final_op == "DROP":
+                known_states[tid] = "DROPPED"
+
             out.append(op.model_copy(update=updates) if updates else op)
+        return out, coerced
+
+    def _sanitize_world_ops(
+        self,
+        ops: list[WorldOp],
+        known_ids: set[str],
+    ) -> tuple[list[WorldOp], list[dict]]:
+        """幽灵 UPDATE / 非法前缀 REGISTER → NOOP；同批 REGISTER 后允许 UPDATE。"""
+        known = set(known_ids)
+        out: list[WorldOp] = []
+        coerced: list[dict] = []
+        for op in ops:
+            if op.op == "NOOP":
+                out.append(op)
+                continue
+            eid = op.entity_id
+            prefix = eid.split(".", 1)[0] if "." in eid else ""
+            from_prefix = _PREFIX_KIND.get(prefix)
+
+            if op.op == "REGISTER":
+                if from_prefix is None:
+                    coerced.append({
+                        "from": "REGISTER",
+                        "to": "NOOP",
+                        "reason": f"非法 world 前缀: {eid}",
+                    })
+                    out.append(op.model_copy(update={"op": "NOOP"}))
+                    continue
+                if op.kind is not None and op.kind != from_prefix:
+                    coerced.append({
+                        "from": "REGISTER",
+                        "to": "NOOP",
+                        "reason": f"kind={op.kind} 与前缀 {prefix} 冲突（{eid}）",
+                    })
+                    out.append(op.model_copy(update={"op": "NOOP"}))
+                    continue
+                if eid in known:
+                    coerced.append({
+                        "from": "REGISTER",
+                        "to": "NOOP",
+                        "reason": f"register_exists: {eid}",
+                    })
+                    out.append(op.model_copy(update={"op": "NOOP"}))
+                    continue
+                known.add(eid)
+                out.append(op)
+                continue
+
+            if op.op in {"UPDATE_STATE", "SOFT-INVALIDATE"}:
+                if eid not in known:
+                    coerced.append({
+                        "from": op.op,
+                        "to": "NOOP",
+                        "reason": f"world 目标不存在: {eid}",
+                    })
+                    out.append(op.model_copy(update={"op": "NOOP"}))
+                    continue
+                out.append(op)
+                continue
+
+            coerced.append({
+                "from": str(op.op),
+                "to": "NOOP",
+                "reason": f"未知 WorldOp: {op.op}",
+            })
+            out.append(op.model_copy(update={"op": "NOOP"}))
         return out, coerced
 
     def _dedupe(
@@ -215,6 +334,37 @@ class Reconciler:
             seen.add(key)
             out.append(op)
         return out
+
+
+def _arc_transition_ok(
+    kind: str, cur: str | None, op: str
+) -> tuple[bool, str | None, str | None]:
+    """返回 (ok, new_state, reason)。REVEAL/NOOP 不走此函数。"""
+    if kind == "thread":
+        if op == "DROP":
+            if cur in _THREAD_TERMINAL:
+                return False, None, f"thread 终态 {cur} 不允许 DROP"
+            return True, "DROPPED", None
+        rule = _THREAD_TRANS.get(op)
+        if rule is None:
+            return False, None, f"未知 thread op: {op}"
+        allowed, new_state = rule
+        if cur not in allowed:
+            return False, None, f"状态 {cur} 不允许 {op}（需前态 {sorted(allowed)}）"
+        return True, new_state, None
+
+    # foreshadow / secret
+    if op == "ABANDON":
+        if cur in _FS_TERMINAL:
+            return False, None, f"终态 {cur} 不允许 ABANDON"
+        return True, "ABANDONED", None
+    rule = _FS_TRANS.get(op)
+    if rule is None:
+        return False, None, f"未知 foreshadow op: {op}"
+    allowed, new_state = rule
+    if cur not in allowed:
+        return False, None, f"状态 {cur} 不允许 {op}（需前态 {sorted(allowed)}）"
+    return True, new_state, None
 
 
 def _norm_arc_id(target_id: str, kind: str) -> str:

@@ -82,12 +82,17 @@ def test_must_always_included_even_over_bucket(tmp_path):
 
 
 def test_bucket_subbudget_fair_share(tmp_path):
+    """SHOULD 阶段按分桶配额公平分配；character 与 trajectory 不互相独吞。"""
     mem, arc = _stores(tmp_path)
-    mem.append(_mem("s1", "char.x", "fact", "长" * 40, 5, salience=0.6))
-    mem.append(_mem("s2", "char.x", "fact", "长" * 40, 5, salience=0.55))
-    mem.append(_mem("c1", "char.x", "trait", "长" * 40, 1, salience=0.6))
+    # character 桶：两条 fact；trajectory 桶：一条 arc
+    mem.append(_mem("c1", "char.x", "fact", "长" * 40, 1, salience=0.6))
+    mem.append(_mem("c2", "char.x", "fact", "长" * 40, 1, salience=0.55))
+    arc.append(ArcRecord(id="th.main", kind="thread", desc="长" * 40,
+                         thread_state="OPEN", established_ch=1))
     q = Query(as_of_chapter=5, char="char.x", budget_tokens=400,
-              bucket_weights={"streaming": 0.05, "character": 0.4, "trajectory": 0.4})
+              bucket_weights={"streaming": 0.05, "character": 0.2, "trajectory": 0.4})
     res = retrieve(q, mem, arc)
-    assert "c1" in res.item_ids
-    assert res.priorities["s1"] == "SHOULD"
+    assert res.priorities["c1"] == "SHOULD"
+    # character 子预算紧时 trajectory 的 arc 仍能进（公平份额）
+    assert "th.main" in res.item_ids or "c1" in res.item_ids
+

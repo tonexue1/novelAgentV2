@@ -204,10 +204,35 @@ assert:
 
 **结论**：约一半维度可做成确定性 UT（硬抓手，进 CI），另一半做阈值评测集（judge 打分过线）——这是整个评估系统最实的可实现性支点。
 
-## 3. 在线 vs 离线（待设计）
+## 3. 在线 vs 离线
 
-> 待落：四时间尺度（拍/章/卷/全书）× 内外双回路（内=生产回路，评估内嵌为守门+舵手；外=改进回路，离线回归+反哺配置）+ 成本分层约束 + 留痕即评估地基。
-> **待办**：补"A/B 测试与本体系的关系"小节——A/B ⊂ 外回路，依赖评估维度当标尺；本系统多为离线变体评测，受"整本书为单位/非确定/长程滞后"三重约束；区分 best-of-N 候选择优（非 A/B）。
+### 3.0 M5a 离线 CLI（已落）
+
+**形态**：独立外回路，**不嵌 walk**。读既有留痕 / stores → scorecard；两次 run 目录 → compare。主链路零侵入。
+
+**CLI**：
+
+```text
+uv run python -m story_engine.eval report --run data/walk [--runs path] [--as-of N] [--json]
+uv run python -m story_engine.eval compare --a <runA> --b <runB> [--json]
+```
+
+**run 目录约定**（与 `scripts/walk.py` 对齐）：
+
+| 路径 | 用途 |
+|------|------|
+| `<run>/stores/arc.jsonl` | C2 伏笔台账 |
+| `<run>/stores/violation.jsonl` | D2 阶梯 |
+| `<run>/stores/script.jsonl` | 闸门代理（clean/flagged）+ 默认 as-of |
+| `STORY_TELEMETRY_PATH` 或 `--runs` | E1/E2（及 RunRecord.verdict） |
+
+缺文件 → 对应块标 `available=false`，不崩。
+
+**M5a 指标子集**：E1/E2、D2、C2、script consistency 计数。不做 B3/C1/A3 全量、judge、CI 门禁（聚合器本身有 UT）。
+
+**A/B**：同 seed 两次 walk，telemetry / stores 分目录；`compare` 只报 Δ，**不自动判胜负**。模型切换先用 `STORY_LLM_NODE_MODELS` / `THINKING` env，确认后再冻 `node_profiles`。
+
+> 仍待落：四时间尺度 × 内外双回路完整设计；best-of-N vs A/B 辨析。
 
 ## 4. 标尺方法：硬检 / LLM-as-judge / 人工抽样（待设计）
 

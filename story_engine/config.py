@@ -38,6 +38,11 @@ class Settings(BaseSettings):
 
     genesis_max_iter: int = 3
 
+    # Embedder（M4b；默认 fake 保 UT 零成本）
+    embedder_provider: str = "fake"    # fake | openai
+    embedder_model: str = "text-embedding-3-small"
+    embedder_dim: int = 64             # FakeEmbedder 维度
+
 
 def load_settings() -> Settings:
     return Settings()

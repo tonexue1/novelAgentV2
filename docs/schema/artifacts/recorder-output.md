@@ -52,9 +52,29 @@ MemOp:                                     # 对齐 memory-store 字段
   example?      : str                       # voice 专属：真实台词例句（few-shot 库）
   resolution?   : achieved | abandoned | superseded   # 配 SOFT-INVALIDATE
   extractor_version : str                   # 重建版本化
+
+WorldOp:                                   # 对齐 world-store 演化域；Applier 确定性落库
+  entity_id     : concept.|art.|loc.|org.|item.|race.{slug}
+  op            : REGISTER | UPDATE_STATE | SOFT-INVALIDATE | NOOP
+  evidence      : EvidenceSpan[]            # 【必填】守 U
+  # —— REGISTER：现场造出的长尾实体（默认 minor）——
+  canonical_name?: str
+  tier?         : core | major | minor      # 默认 minor；core/major 仅创世/晋升可写
+  definition?   : str                       # minor 轻量自动抽取
+  aliases?      : str[]
+  kind?         : concept | art | location | faction | item | race
+  # —— UPDATE_STATE：演化域（势力覆灭、据点易主…）——
+  state?        : {k: v}                    # 合并写入；旧 state 走 as-of 软失效
+
+TierNom:                                   # 人物分级提名；Replanner 卷末确认后 Applier 落 MemoryEntry.tier
+  char          : char.{slug}
+  from_tier     : 0|1|2|3
+  to_tier       : 0|1|2|3
+  reason        : str
+  evidence      : EvidenceSpan[]
 ```
 
-> `ArcOp` 精确 schema 见 [arc-store](../stores/arc-store.md)；`WorldOp` 见 [world-store](../stores/world-store.md) 演化域。
+> `ArcOp` 精确 schema 见 [arc-store](../stores/arc-store.md)。`WorldOp` 本文件为权威字段表；语义约束见 [world-store](../stores/world-store.md)。
 
 ## 不变式
 

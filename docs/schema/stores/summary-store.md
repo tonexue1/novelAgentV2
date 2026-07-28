@@ -45,6 +45,11 @@ SummaryEntry:                          # 多分辨率摘要，Script 派生投�
   t_valid       : c{n}                  # 产出章（volume/saga 记卷/篇末章）
   produced_by   : Summarizer | Replanner
   summarizer_version : str              # 版本化重建（守 D）
+
+SummaryDelta:                          # Summarizer/Replanner → Applier，独立于 RecorderOutput
+  chapter       : c{n}                  # 产出章（volume/saga 记卷/篇末章号）
+  entries       : SummaryEntry[]        # 一批幂等 upsert；(level,ref) 已存在则替换并升 summarizer_version
+  produced_by   : Summarizer | Replanner
 ```
 
 ## 检索用法

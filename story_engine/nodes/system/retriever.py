@@ -1,11 +1,10 @@
-"""Retriever（规则版，无 embedding）—— 对应 docs/nodes/system/retriever.md + ARCHITECTURE §8。
+"""Retriever —— 对应 docs/nodes/system/retriever.md + ARCHITECTURE §8。
 
 filter-then-rank-then-budget：
-  ① 过滤：scope 匹配 + as-of 可见（未来不泄漏）+ 认知边界（剔除 hidden_from 的 secret）。
-  ② 排序：salience / recency / 词法相关(BM25) / tier / goal 加权，确定性打分。
-  ③ 预算：按分排序贪心填至 token 预算（tiktoken 计数）。
-分桶：trajectory / character / streaming（M1 打标签，全局预算；子预算留后续）。
-语义检索（embedding）留 M4。
+  ① 过滤：scope 匹配 + as-of 可见 + 认知边界。
+  ② 排序：salience / recency / BM25 词法 / cosine 语义 / tier / goal 加权。
+  ③ 预算：MUST/SHOULD/MAY + 分桶子预算。
+分桶：character（画像+经历）/ trajectory（Plan/Arc）/ streaming（过去章摘要）。
 """
 
 from __future__ import annotations
@@ -17,26 +16,25 @@ from typing import Literal
 
 from rank_bm25 import BM25Okapi
 
+from story_engine.nodes.system.embedder import cosine
 from story_engine.util.tokens import count_tokens
 
-# 默认打分权重（M1 硬编码，后续可配）
+# 默认打分权重
 W_SALIENCE = 1.0
 W_RECENCY = 0.5
 W_FOCUS = 1.5
+W_SEMANTIC = 1.5
 W_TIER = 0.5
 GOAL_BOOST = 0.5
 
-# 优先级分级阈值（MUST 必进 / SHOULD 分桶配额 / MAY 余量兜底）
 Priority = Literal["MUST", "SHOULD", "MAY"]
 MUST_SALIENCE = 0.85
 SHOULD_SALIENCE = 0.5
 
-# 分桶子预算默认权重（占总预算比例）
 DEFAULT_BUCKET_WEIGHTS = {"character": 0.4, "trajectory": 0.4, "streaming": 0.2}
 
 
 def default_priority(it: "RetrievableItem") -> Priority:
-    """确定性优先级：目标/知悉的 secret/高显著=MUST；当前场或中显著=SHOULD；余=MAY。"""
     if it.is_goal or it.kind == "arc:secret" or it.salience >= MUST_SALIENCE:
         return "MUST"
     if it.bucket == "streaming" or it.salience >= SHOULD_SALIENCE:
@@ -48,30 +46,31 @@ _TOKEN_RE = re.compile(rf"[{_CJK}]|[a-zA-Z0-9]+")
 
 
 def _tokenize(text: str) -> list[str]:
-    """CJK 按字、ASCII 按词。"""
     return [t.lower() for t in _TOKEN_RE.findall(text or "")]
 
 
 @dataclass
 class Query:
     as_of_chapter: int
-    char: str | None = None          # character 节点：全称 char.{slug}，限 scope + 认知边界
-    focus: str = ""                  # 场景目标 / 关键词，供词法相关
+    char: str | None = None
+    focus: str = ""
     budget_tokens: int = 2000
-    bucket_weights: dict[str, float] | None = None   # None=默认权重
+    bucket_weights: dict[str, float] | None = None
+    query_vec: list[float] | None = None   # 语义检索；由调用方用 Embedder 预计算
 
 
 @dataclass
 class RetrievableItem:
     item_id: str
     text: str
-    kind: str                        # memory:{type} | arc:{kind}
+    kind: str
     scope: str
     t_valid: int
     salience: float
-    tier: int | None                 # CharTier 值，arc 为 None
+    tier: int | None
     is_goal: bool = False
-    bucket: str = "trajectory"       # trajectory | character | streaming
+    bucket: str = "trajectory"
+    vec: list[float] | None = None
 
 
 @dataclass
@@ -93,12 +92,10 @@ class RetrievalResult:
         return out
 
 
-# TODO(M4, review ARCHITECTURE §8 / §8.2): 分桶语义待重对齐——
-#   fact 应归 character 桶（经历子桶），streaming 桶应是「过去章」script 而非本章。
-#   现状 M1 无 embedding，桶标签暂不影响结果，接真检索/子预算前修。
-#   （旧注曾写 §2.4，ARCHITECTURE 无此节，已更正。）
+# 分桶语义对齐 ARCHITECTURE §8 / §8.2：
+#   character = 画像 + 经历(fact)；trajectory = Plan/Arc；streaming = 过去章摘要/script
 _BUCKET_BY_MEMTYPE = {
-    "fact": "trajectory",
+    "fact": "character",
     "belief": "character",
     "trait": "character",
     "voice": "character",
@@ -117,11 +114,26 @@ def _mem_to_item(m, as_of_chapter: int) -> RetrievableItem:
         salience=m.salience,
         tier=int(m.tier),
         is_goal=(m.type == "goal"),
-        bucket="streaming" if m.t_valid == as_of_chapter else _BUCKET_BY_MEMTYPE.get(m.type, "trajectory"),
+        bucket=_BUCKET_BY_MEMTYPE.get(m.type, "character"),
+        vec=getattr(m, "vec", None),
     )
 
 
-def retrieve(query: Query, mem_store, arc_store=None) -> RetrievalResult:
+def _summary_to_item(s) -> RetrievableItem:
+    return RetrievableItem(
+        item_id=s.key if hasattr(s, "key") else f"{s.level}:{s.ref}",
+        text=s.text,
+        kind=f"summary:{s.level}",
+        scope="summary",
+        t_valid=s.t_valid,
+        salience=0.55,
+        tier=None,
+        bucket="streaming",
+        vec=getattr(s, "vec", None),
+    )
+
+
+def retrieve(query: Query, mem_store, arc_store=None, summary_store=None) -> RetrievalResult:
     # ── ① 过滤 ────────────────────────────────────────────
     candidates: list[RetrievableItem] = []
     for m in mem_store.as_of(query.as_of_chapter):
@@ -145,20 +157,33 @@ def retrieve(query: Query, mem_store, arc_store=None) -> RetrievalResult:
                 )
             )
 
+    if summary_store is not None:
+        for s in summary_store.all():
+            # streaming = 过去章；本章工作缓冲不进检索
+            if s.t_valid >= query.as_of_chapter:
+                continue
+            if s.level not in ("scene", "chapter", "volume", "saga"):
+                continue
+            candidates.append(_summary_to_item(s))
+
     if not candidates:
         return RetrievalResult()
 
-    # ── ② 排序（确定性打分）──────────────────────────────
+    # ── ② 排序（词法 BM25 + 语义 cosine）──────────────────
     focus_tokens = _tokenize(query.focus)
     bm25_scores = _bm25(candidates, focus_tokens)
     scored: list[tuple[float, RetrievableItem]] = []
     for it, focus_score in zip(candidates, bm25_scores):
         recency = 1.0 / (1.0 + max(0, query.as_of_chapter - it.t_valid))
         tier_w = 0.0 if it.tier is None else (3 - it.tier) / 3.0
+        sem = 0.0
+        if query.query_vec is not None and it.vec:
+            sem = max(0.0, cosine(query.query_vec, it.vec))
         score = (
             W_SALIENCE * it.salience
             + W_RECENCY * recency
             + W_FOCUS * focus_score
+            + W_SEMANTIC * sem
             + W_TIER * tier_w
             + (GOAL_BOOST if it.is_goal else 0.0)
         )
